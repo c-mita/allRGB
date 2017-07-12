@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <math.h>
 #include <limits.h>
 #include <png.h>
 
@@ -325,6 +326,33 @@ void shuffle(pixel* pixels, const int size) {
     }
 }
 
+int hue_sort(const void* p1, const void* p2) {
+    /* sort based on hue angle */
+    pixel* x = (pixel*) p1;
+    pixel* y = (pixel*) p2;
+    double sqrt3 = 1.732050808;
+    double hx = atan2(sqrt3 * (x->g - x->b), 2.0 * x->r - x->g - x->b);
+    double hy = atan2(sqrt3 * (y->g - y->b), 2.0 * y->r - y->g - y->b);
+    return (hx < hy) ? -1 : (hx > hy);
+    return hx - hy;
+}
+
+int hsp_sort(const void* p1, const void* p2) {
+    /*
+     * copied from alienryderflex.com/hsp.html
+     * appears to be based on Photoshop RGB->Grayscale conversion
+     */
+    pixel* x = (pixel*) p1;
+    pixel* y = (pixel*) p2;
+    float bx = 0.299 * x->r * x->r + 0.587 * x->g * x->g + 0.144 * x->b * x->b;
+    float by = 0.299 * y->r * y->r + 0.587 * y->g * y->g + 0.144 * y->b * y->b;
+    return (bx < by) ? -1 : (bx > by);
+}
+
+void color_sort(pixel* pixels, const int size) {
+    qsort(pixels, size, sizeof(*pixels), &hue_sort);
+}
+
 void get_neighbour_idxs(const int idx, const int size_x, const int size_y, int* others) {
     int l_edge = idx % size_x == 0;
     int r_edge = idx % size_x == size_x - 1;
@@ -453,7 +481,7 @@ int main() {
             }
         }
     }
-    shuffle(colors, no_colors);
+    color_sort(colors, no_colors);
     fill(colors, buffer, IMAGE_X, IMAGE_Y);
     printf("Verifying output\n");
     for (ptr = buffer; ptr < buffer + no_colors; ptr++) {
