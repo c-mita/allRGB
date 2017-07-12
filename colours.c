@@ -54,6 +54,14 @@ struct kd_pixel_node_t {
 };
 typedef struct kd_pixel_node_t kd_pixel_node;
 
+struct kd_pixel_tree_t {
+    int pixel_count;
+    int leaf_count;
+    int node_count;
+    kd_pixel_node* root;
+};
+typedef struct kd_pixel_tree_t kd_pixel_tree;
+
 int color_diff_sq(pixel c1, pixel c2) {
     int r = c1.r - c2.r;
     int g = c1.g - c2.g;
@@ -81,21 +89,28 @@ void destroy_kd_leaf(kd_pixel_leaf* leaf) {
     free(leaf);
 }
 
-kd_pixel_node* create_kd_pixel_tree() {
-    kd_pixel_node* node = create_kd_node();
-    kd_pixel_leaf* leaf = create_kd_leaf();
-    node->leaf = leaf;
-    return node;
+kd_pixel_tree* create_kd_tree() {
+    kd_pixel_tree* tree = malloc(sizeof(kd_pixel_tree));
+    memset(tree, 0, sizeof(kd_pixel_tree));
+    tree->root = create_kd_node();
+    tree->root->leaf = create_kd_leaf();
+    tree->leaf_count = 1;
+    return tree;
 }
 
-void destroy_kd_pixel_tree(kd_pixel_node* root) {
+void destroy_kd_pixel_tree_r(kd_pixel_node* root) {
     if (root->leaf) {
         destroy_kd_leaf(root->leaf);
     } else {
-        destroy_kd_pixel_tree(root->left);
-        destroy_kd_pixel_tree(root->right);
+        destroy_kd_pixel_tree_r(root->left);
+        destroy_kd_pixel_tree_r(root->right);
     }
     destroy_kd_node(root);
+}
+
+void destroy_kd_tree(kd_pixel_tree* tree) {
+    destroy_kd_pixel_tree_r(tree->root);
+    free(tree);
 }
 
 kd_pixel_node* split_kd_leaf(kd_pixel_node* leaf_node) {
@@ -171,23 +186,25 @@ kd_pixel_node* find_subspace(kd_pixel_node* root, const pixel p) {
     return node;
 }
 
-void add_pixel(kd_pixel_node* root, const pixel_idx p) {
-    kd_pixel_node* node = find_subspace(root, p.p);
+void add_pixel(kd_pixel_tree* tree, const pixel_idx p) {
+    kd_pixel_node* node = find_subspace(tree->root, p.p);
     kd_pixel_leaf* leaf = node->leaf;
     if (leaf->count >= KD_LEAF_COUNT) {
         split_kd_leaf(node);
         node = find_subspace(node, p.p);
         leaf = node->leaf;
+        tree->leaf_count++;
         if (leaf->count >= KD_LEAF_COUNT) {
             printf("LEAF SPLIT DIDN'T SPLIT!\n");
             abort();
         }
     }
     leaf->pixels[leaf->count++] = p;
+    tree->pixel_count++;
 }
 
-void remove_pixel(kd_pixel_node* root, const pixel_idx p) {
-    kd_pixel_node* node = find_subspace(root, p.p);
+void remove_pixel(kd_pixel_tree* tree, const pixel_idx p) {
+    kd_pixel_node* node = find_subspace(tree->root, p.p);
     kd_pixel_leaf* leaf = node->leaf;
     int i = 0;
     for (i = 0; i < leaf->count; i++) {
@@ -203,6 +220,7 @@ void remove_pixel(kd_pixel_node* root, const pixel_idx p) {
             #endif
             memmove(leaf->pixels + i, leaf->pixels + i + 1, (leaf->count - i - 1) * sizeof(pixel_idx));
             leaf->count--;
+            tree->pixel_count--;
             break;
         }
     }
@@ -250,8 +268,8 @@ int search_kd_pixel_tree(const kd_pixel_node* node, const pixel p, pixel_idx* ou
     }
 }
 
-int find_closest(const kd_pixel_node* kdtree, const pixel p, pixel_idx* out) {
-    return search_kd_pixel_tree(kdtree, p, out);
+int find_closest(const kd_pixel_tree* kdtree, const pixel p, pixel_idx* out) {
+    return search_kd_pixel_tree(kdtree->root, p, out);
 }
 
 pixel int_to_pixel(int x) {
@@ -369,6 +387,32 @@ void get_neighbour_idxs(const int idx, const int size_x, const int size_y, int* 
     others[N_BR] = !r_edge && !b_edge ? idx + 1 + size_x : invalid;
 }
 
+int get_available_neighbour_idxs(const int idx, const pixel* data, const int size_x, const int size_y, int* others) {
+    int l_edge = idx % size_x == 0;
+    int r_edge = idx % size_x == size_x - 1;
+    int t_edge = idx < size_x;
+    int b_edge = idx >= (size_x * (size_y - 1));
+    int invalid = -1;
+    int* ptr = others;
+    *ptr = !l_edge && !t_edge ? idx - size_x - 1 : invalid;
+    ptr += (*ptr == invalid || data[*ptr].a == 0x1) ? 0 : 1;
+    *ptr = !t_edge ? idx - size_x : invalid;
+    ptr += (*ptr == invalid || data[*ptr].a == 0x1) ? 0 : 1;
+    *ptr = !r_edge && !t_edge ? idx - size_x + 1 : invalid;
+    ptr += (*ptr == invalid || data[*ptr].a == 0x1) ? 0 : 1;
+    *ptr = !l_edge ? idx - 1 : invalid;
+    ptr += (*ptr == invalid || data[*ptr].a == 0x1) ? 0 : 1;
+    *ptr = !r_edge ? idx + 1 : invalid;
+    ptr += (*ptr == invalid || data[*ptr].a == 0x1) ? 0 : 1;
+    *ptr = !l_edge && !b_edge ? idx - 1 + size_x : invalid;
+    ptr += (*ptr == invalid || data[*ptr].a == 0x1) ? 0 : 1;
+    *ptr = !b_edge ? idx + size_x : invalid;
+    ptr += (*ptr == invalid || data[*ptr].a == 0x1) ? 0 : 1;
+    *ptr = !r_edge && !b_edge ? idx + 1 + size_x : invalid;
+    ptr += (*ptr == invalid || data[*ptr].a == 0x1) ? 0 : 1;
+    return ptr - others;
+}
+
 void get_neighbours(const int idx, const pixel* data,
         const int size_x, const int size_y,
         pixel* others) {
@@ -392,7 +436,7 @@ void fill(const pixel* pixels, pixel* buffer,
     int i = 0;
     const int size = size_x * size_y;
     const pixel* ptr = pixels;
-    kd_pixel_node* kdtree = create_kd_pixel_tree();
+    kd_pixel_tree* kdtree = create_kd_tree();
     for (i = 0 ; i < STARTING_SEEDS; i++) {
         /* TODO: use different ranges for seeds */
         int idx = rand_in_range(0, size - 1);
@@ -406,7 +450,9 @@ void fill(const pixel* pixels, pixel* buffer,
     ptr--;
     while (++ptr < pixels + size) {
         if (++steps % (size / 100) == 0) {
-            printf("%d\n", percentage++);
+            printf("Progress: %d\n", percentage++);
+            printf("Count in tree: %d\n", kdtree->pixel_count);
+            printf("Leaf count in tree: %d\n", kdtree->leaf_count);
             steps = 0;
         }
         pixel_idx closest;
@@ -418,19 +464,12 @@ try_again:
             break;
         }
         int neighbour_idxs[8];
-        get_neighbour_idxs(closest.idx, size_x, size_y, neighbour_idxs);
-        /* fill one in and count the gaps */
-        int available = 0;
+        int available = get_available_neighbour_idxs(closest.idx, buffer, size_x, size_y, neighbour_idxs);
         int filled_idx = -1;
-        for (i = 0; i < 8; i++) {
-            int idx = neighbour_idxs[i];
-            if (idx >= 0 && buffer[idx].a == 0) {
-                if (available == 0) {
-                    buffer[idx] = *ptr;
-                    filled_idx = idx;
-                }
-                available++;
-            }
+        if (available) {
+            i = rand_in_range(0, available - 1);
+            filled_idx = neighbour_idxs[i];
+            buffer[filled_idx] = *ptr;
         }
         if (available == 0) {
             remove_pixel(kdtree, closest);
@@ -446,21 +485,13 @@ try_again:
         }
         pixel_idx new_pixel = {*ptr, filled_idx};
         /* check that we're not adding a pixel with no empty neighbours */
-        available = 0;
-        get_neighbour_idxs(filled_idx, size_x, size_y, neighbour_idxs);
-        for (i = 0; i < 8; i++) {
-            int idx = neighbour_idxs[i];
-            if (idx >= 0 && buffer[idx].a == 0) {
-                available++;
-                break;
-            }
-        }
+        available = get_available_neighbour_idxs(filled_idx, buffer, size_x, size_y, neighbour_idxs);
         if (available) {
             add_pixel(kdtree, new_pixel);
         }
-
     }
-    destroy_kd_pixel_tree(kdtree);
+    printf("Final tree count: %d\n", kdtree->leaf_count);
+    destroy_kd_tree(kdtree);
 }
 
 int main() {
