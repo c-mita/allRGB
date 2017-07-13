@@ -348,11 +348,41 @@ int hue_sort(const void* p1, const void* p2) {
     /* sort based on hue angle */
     pixel* x = (pixel*) p1;
     pixel* y = (pixel*) p2;
-    double sqrt3 = 1.732050808;
-    double hx = atan2(sqrt3 * (x->g - x->b), 2.0 * x->r - x->g - x->b);
-    double hy = atan2(sqrt3 * (y->g - y->b), 2.0 * y->r - y->g - y->b);
-    return (hx < hy) ? -1 : (hx > hy);
-    return hx - hy;
+    int hxn = x->g - x->b;
+    int hxd = 2.0 * x->r - x->g - x->b;
+    int hyn = y->g - y->b;
+    int hyd = 2.0 * y->r - y->g - y->b;
+    if (hxn < 0 && hyn >= 0) return -1;
+    if (hxn >= 0 && hyn < 0) return 1;
+    if (hxn < 0 && hyn < 0) {
+        if (hxd < 0 && hyd >= 0) return -1;
+        if (hxd >=0 && hyd < 0) return 1;
+    }
+    if (hxn > 0 && hyn > 0) {
+        if (hxd < 0 && hyd >= 0) return 1;
+        if (hxd >=0 && hyd < 0) return -1;
+    }
+
+    /* sort out zeroes in numerator */
+    if (hxn == 0 && hxd < 0) {
+        return hyn == 0 ? 0 : 1;
+    }
+    if (hyn == 0 && hyd < 0) {
+        return hxn == 0 ? 0 : -1;
+    }
+    if ((hxn == 0 && hxd >= 0) || (hyn == 0 && hyd >= 0)) {
+        return (hxn < hyn) ? -1 : (hxn > hyn);
+    }
+
+    /*
+     * atan(v) is strictly increasing for v in the same quadrant
+     * so only need to compare hxn/hxd < hyn/hyd, after handling zero case
+     * note n1/d1 < n2/d2 -> n1*d2 < n2*d2 so long as d1 and d2 have same sign
+     */
+    int lhs = hxn * hyd;
+    int rhs = hyn * hxd;
+    return (lhs < rhs) ? -1 : (lhs > rhs);
+
 }
 
 int hsp_sort(const void* p1, const void* p2) {
