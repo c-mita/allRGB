@@ -461,6 +461,20 @@ void get_neighbours(const int idx, const pixel* data,
     others[N_BR] = idxs[N_BR] > -1 ? data[idxs[N_BR]] : invalid;
 }
 
+kd_pixel_tree* build_new_tree(const pixel* buffer, const int size_x, const int size_y) {
+    kd_pixel_tree* tree = create_kd_tree();
+    int idx = -1;
+    while (++idx < size_x * size_y) {
+        pixel p = buffer[idx];
+        int neighbours[8] = {0};
+        if (p.a == 1 && get_available_neighbour_idxs(idx, buffer, size_x, size_y, neighbours)) {
+            pixel_idx pdx = {p, idx};
+            add_pixel(tree, pdx);
+        }
+    }
+    return tree;
+}
+
 void fill(const pixel* pixels, pixel* buffer,
         const int size_x, const int size_y) {
     int i = 0;
@@ -477,13 +491,17 @@ void fill(const pixel* pixels, pixel* buffer,
     ptr += STARTING_SEEDS;
     int steps = 0;
     int percentage = 0;
+    int reset_steps = 0;
     ptr--;
     while (++ptr < pixels + size) {
         if (++steps % (size / 100) == 0) {
-            printf("Progress: %d\n", percentage++);
-            printf("Count in tree: %d\n", kdtree->pixel_count);
-            printf("Leaf count in tree: %d\n", kdtree->leaf_count);
+            printf("Progress: %2d \tLeaves: %d\n", percentage++, kdtree->leaf_count);
             steps = 0;
+        }
+        if (++reset_steps % (size / 50) == 0) {
+            destroy_kd_tree(kdtree);
+            kdtree = build_new_tree(buffer, size_x, size_y);
+            reset_steps = 0;
         }
         pixel_idx closest;
         int distance;
@@ -520,7 +538,6 @@ try_again:
             add_pixel(kdtree, new_pixel);
         }
     }
-    printf("Final tree count: %d\n", kdtree->leaf_count);
     destroy_kd_tree(kdtree);
 }
 
