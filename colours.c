@@ -274,8 +274,7 @@ int search_kd_pixel_tree(const kd_pixel_node* node, const pixel p, pixel_idx* ou
         first = d < 0 ? node->left : node->right;
         second = d < 0 ? node->right : node->left;
         int dist = search_kd_pixel_tree(first, p, out);
-        if (d < 0) d *= -1;
-        if (dist <= d) {
+        if (dist <= d * d) {
             return dist;
         } else {
             pixel_idx alt_out;
