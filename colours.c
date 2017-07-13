@@ -130,9 +130,9 @@ kd_pixel_node* split_kd_leaf(kd_pixel_node* leaf_node) {
         g += leaf->pixels[i].p.g;
         b += leaf->pixels[i].p.b;
     }
-    r /= leaf->count;
-    g /= leaf->count;
-    b /= leaf->count;
+    r = (r / leaf->count) + (r % leaf->count != 0);
+    g = (g / leaf->count) + (g % leaf->count != 0);
+    b = (b / leaf->count) + (b % leaf->count != 0);
     for (int i = 0; i < leaf->count; i++) {
         r_diff += r <= leaf->pixels[i].p.r ? 1 : -1;
         g_diff += g <= leaf->pixels[i].p.g ? 1 : -1;
