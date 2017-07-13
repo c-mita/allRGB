@@ -133,6 +133,27 @@ kd_pixel_node* split_kd_leaf(kd_pixel_node* leaf_node) {
     r = (r / leaf->count) + (r % leaf->count != 0);
     g = (g / leaf->count) + (g % leaf->count != 0);
     b = (b / leaf->count) + (b % leaf->count != 0);
+    int r_min = INT_MAX;
+    int r_max = 0;
+    int g_min = INT_MAX;
+    int g_max = 0;
+    int b_min = INT_MAX;
+    int b_max = 0;
+    for (i = 0; i < leaf->count; i++) {
+        r_min = r_min < leaf->pixels[i].p.r ? r_min : leaf->pixels[i].p.r;
+        r_max = r_max > leaf->pixels[i].p.r ? r_max : leaf->pixels[i].p.r;
+        g_min = g_min < leaf->pixels[i].p.g ? g_min : leaf->pixels[i].p.g;
+        g_max = g_max > leaf->pixels[i].p.g ? g_max : leaf->pixels[i].p.g;
+        b_min = b_min < leaf->pixels[i].p.b ? b_min : leaf->pixels[i].p.b;
+        b_max = b_max > leaf->pixels[i].p.b ? b_max : leaf->pixels[i].p.b;
+    }
+    r_diff = r_max - r_min;
+    g_diff = g_max - g_min;
+    b_diff = b_max - b_min;
+    split = r_diff > g_diff ? KD_RED : KD_GREEN;
+    int tmp = r_diff > g_diff ? r_diff : g_diff;
+    split = tmp >= b_diff ? split : KD_BLUE;
+    /*
     for (int i = 0; i < leaf->count; i++) {
         r_diff += r <= leaf->pixels[i].p.r ? 1 : -1;
         g_diff += g <= leaf->pixels[i].p.g ? 1 : -1;
@@ -144,6 +165,7 @@ kd_pixel_node* split_kd_leaf(kd_pixel_node* leaf_node) {
     split = r_diff < g_diff ? KD_RED : KD_GREEN;
     int tmp = r_diff < g_diff ? r_diff : g_diff;
     split = tmp < b_diff ? split : KD_BLUE;
+    */
 
     int count = leaf->count;
     kd_pixel_leaf* leaf_l = leaf;
