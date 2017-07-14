@@ -58,6 +58,7 @@ struct kd_pixel_tree_t {
     int pixel_count;
     int leaf_count;
     int node_count;
+    int empty_leaf_count;
     kd_pixel_node* root;
 };
 typedef struct kd_pixel_tree_t kd_pixel_tree;
@@ -95,6 +96,7 @@ kd_pixel_tree* create_kd_tree() {
     tree->root = create_kd_node();
     tree->root->leaf = create_kd_leaf();
     tree->leaf_count = 1;
+    tree->empty_leaf_count = 1;
     return tree;
 }
 
@@ -211,6 +213,7 @@ kd_pixel_node* find_subspace(kd_pixel_node* root, const pixel p) {
 void add_pixel(kd_pixel_tree* tree, const pixel_idx p) {
     kd_pixel_node* node = find_subspace(tree->root, p.p);
     kd_pixel_leaf* leaf = node->leaf;
+    if (node->leaf->count == 0) tree->empty_leaf_count--;
     if (leaf->count >= KD_LEAF_COUNT) {
         split_kd_leaf(node);
         node = find_subspace(node, p.p);
@@ -242,6 +245,7 @@ void remove_pixel(kd_pixel_tree* tree, const pixel_idx p) {
             #endif
             memmove(leaf->pixels + i, leaf->pixels + i + 1, (leaf->count - i - 1) * sizeof(pixel_idx));
             leaf->count--;
+            if (leaf->count == 0) tree->empty_leaf_count++;
             tree->pixel_count--;
             break;
         }
@@ -512,17 +516,17 @@ void fill(const pixel* pixels, pixel* buffer,
     ptr += STARTING_SEEDS;
     int steps = 0;
     int percentage = 0;
-    int reset_steps = 0;
     ptr--;
     while (++ptr < pixels + size) {
         if (++steps % (size / 100) == 0) {
             printf("Progress: %2d \tLeaves: %d\n", percentage++, kdtree->leaf_count);
             steps = 0;
         }
-        if (++reset_steps % (size / 50) == 0) {
+        int empties = kdtree->empty_leaf_count;
+        float ratio = ((float) empties) / (float) kdtree->leaf_count;
+        if (ratio >= 0.05 && empties > 1) {
             destroy_kd_tree(kdtree);
             kdtree = build_new_tree(buffer, size_x, size_y);
-            reset_steps = 0;
         }
         pixel_idx closest;
         int distance;
