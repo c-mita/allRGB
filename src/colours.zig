@@ -1,0 +1,149 @@
+const std = @import("std");
+
+pub const Pixel = struct {
+    red: u8 = 0,
+    green: u8 = 0,
+    blue: u8 = 0,
+    alpha: u8 = 0,
+
+    /// The square of the euclidean distance of the RGB values
+    pub fn distanceSquared(self: *const Pixel, other: Pixel) i32 {
+        const rdiff = @as(i32, self.red) - other.red;
+        const gdiff = @as(i32, self.green) - other.green;
+        const bdiff = @as(i32, self.blue) - other.blue;
+        return rdiff * rdiff + gdiff * gdiff + bdiff * bdiff;
+    }
+
+    /// The signed distance between this point and the splitting plane.
+    /// Result is simply self.[red|green|blue] - point
+    pub fn distanceToSplit(self: *const Pixel, axis: u32, point: u8) i32 {
+        const value = self.selectAxis(axis);
+        return @as(i32, value) - point;
+    }
+
+    pub fn selectAxis(self: *const Pixel, axis: u32) u8 {
+        return switch (axis % 3) {
+            0 => self.red,
+            1 => self.green,
+            2 => self.blue,
+            else => unreachable,
+        };
+    }
+
+    pub fn lessThan(self: *const Pixel, axis: u32, value: u8) bool {
+        const self_value = self.selectAxis(axis);
+        return self_value < value;
+    }
+
+    pub fn splitElements(pixels: []const Pixel) struct { u32, u8 } {
+        // find the best splitting point
+        var red: usize = 0;
+        var green: usize = 0;
+        var blue: usize = 0;
+        for (pixels) |pixel| {
+            red += pixel.red;
+            green += pixel.green;
+            blue += pixel.blue;
+        }
+        const red_extra: u8 = if (red % pixels.len != 0) 1 else 0;
+        const green_extra: u8 = if (green % pixels.len != 0) 1 else 0;
+        const blue_extra: u8 = if (blue % pixels.len != 0) 1 else 0;
+        red = (red / pixels.len) + red_extra;
+        green = (green / pixels.len) + green_extra;
+        blue = (blue / pixels.len) + blue_extra;
+
+        var red_min: u8 = 0xFF;
+        var green_min: u8 = 0xFF;
+        var blue_min: u8 = 0xFF;
+        var red_max: u8 = 0;
+        var green_max: u8 = 0;
+        var blue_max: u8 = 0;
+        for (pixels) |pixel| {
+            red_min = @min(red_min, pixel.red);
+            green_min = @min(green_min, pixel.green);
+            blue_min = @min(blue_min, pixel.blue);
+            red_max = @max(red_max, pixel.red);
+            green_max = @max(green_max, pixel.green);
+            blue_max = @max(blue_max, pixel.blue);
+        }
+
+        const red_diff = red_max - red_min;
+        const green_diff = green_max - green_min;
+        const blue_diff = blue_max - blue_min;
+
+        var split_axis: u32 = 0;
+        var split_value: u8 = @intCast(red);
+        split_axis = if (red_diff > green_diff) 0 else 1;
+        const tmp = if (red_diff > green_diff) red_diff else green_diff;
+        split_axis = if (tmp >= blue_diff) split_axis else 2;
+        split_value = switch (split_axis) {
+            0 => @intCast(red),
+            1 => @intCast(green),
+            2 => @intCast(blue),
+            else => unreachable,
+        };
+        return .{ split_axis, split_value };
+    }
+};
+
+pub fn hspCompare(_: void, lhs: Pixel, rhs: Pixel) bool {
+    const lh_red = @as(f64, @floatFromInt(lhs.red));
+    const lh_green = @as(f64, @floatFromInt(lhs.green));
+    const lh_blue = @as(f64, @floatFromInt(lhs.blue));
+    const rh_red = @as(f64, @floatFromInt(rhs.red));
+    const rh_green = @as(f64, @floatFromInt(rhs.green));
+    const rh_blue = @as(f64, @floatFromInt(rhs.blue));
+    const bx = 0.299 * lh_red * lh_red + 0.587 * lh_green * lh_green + 0.144 * lh_blue * lh_blue;
+    const by = 0.299 * rh_red * rh_red + 0.587 * rh_green * rh_green + 0.144 * rh_blue * rh_blue;
+
+    return if (bx < by) true else false;
+}
+
+/// Returns true if lhs < rhs according to the hue angle
+pub fn hueCompare(_: void, lhs: Pixel, rhs: Pixel) bool {
+    // hue = atan2(sqrt(3) * (G-B), 2 * R - G - B)
+    // Mathematically, atan(sqrt(3) * (G-B) / (2 * R - G - B))
+    // Since we only need to "compare" hue values, we can avoid normalization
+    // and the computation of atan (or atan2) since atan is strictly
+    // increasing within a given quadrant.
+    const lh_n: i32 = @as(i32, lhs.green) - lhs.blue;
+    const rh_n: i32 = @as(i32, rhs.green) - rhs.blue;
+    const lh_d: i32 = 2 * @as(i32, lhs.red) - lhs.green - lhs.blue;
+    const rh_d: i32 = 2 * @as(i32, rhs.red) - rhs.green - rhs.blue;
+
+    // quick obvious comparisons when signs differ
+    if (lh_n < 0 and rh_n >= 0) {
+        return true;
+    }
+    if (lh_n >= 0 and rh_n < 0) {
+        return false;
+    }
+    if (lh_n < 0 and rh_n < 0) {
+        if (lh_d < 0 and rh_d >= 0) return true;
+        if (lh_d >= 0 and rh_d < 0) return false;
+    }
+    if (lh_n > 0 and rh_n > 0) {
+        if (lh_d < 0 and rh_d >= 0) return false;
+        if (lh_d >= 0 and rh_d < 0) return true;
+    }
+
+    // handle zeroes for the numerator
+    if (lh_n == 0 and lh_d < 0) {
+        // lhs is never < rhs in this case (rh_n == 0 means lhs == rhs for hue)
+        return false;
+    }
+    if (rh_n == 0 and rh_d < 0) {
+        // lh_n == 0 implies lhs and rhs have the same hue
+        return lh_n != 0;
+    }
+    if ((lh_n == 0 and lh_d >= 0) or (rh_n == 0 and rh_d >= 0)) {
+        return lh_n < rh_n;
+    }
+
+    // finally compare lh_n / lh_d and rh_n / rh_d
+    // we know the signs are consistent at this point so
+    // n1 / d1 < n2 / d2 --> n1 * d2 < n2 * d1
+    const left = @as(i32, lh_n) * rh_d;
+    const right = @as(i32, rh_n) * lh_d;
+    return left < right;
+}

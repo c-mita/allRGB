@@ -1,0 +1,8 @@
+*~
+.*.swp
+
+*.png
+*.out
+
+.zig-cache/
+zig-out/
