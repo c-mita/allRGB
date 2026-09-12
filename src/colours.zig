@@ -99,51 +99,64 @@ pub fn hspCompare(_: void, lhs: Pixel, rhs: Pixel) bool {
     return if (bx < by) true else false;
 }
 
-/// Returns true if lhs < rhs according to the hue angle
-pub fn hueCompare(_: void, lhs: Pixel, rhs: Pixel) bool {
+const HueAngle = struct {
     // hue = atan2(sqrt(3) * (G-B), 2 * R - G - B)
     // Mathematically, atan(sqrt(3) * (G-B) / (2 * R - G - B))
     // Since we only need to "compare" hue values, we can avoid normalization
     // and the computation of atan (or atan2) since atan is strictly
     // increasing within a given quadrant.
-    const lh_n: i32 = @as(i32, lhs.green) - lhs.blue;
-    const rh_n: i32 = @as(i32, rhs.green) - rhs.blue;
-    const lh_d: i32 = 2 * @as(i32, lhs.red) - lhs.green - lhs.blue;
-    const rh_d: i32 = 2 * @as(i32, rhs.red) - rhs.green - rhs.blue;
 
-    // quick obvious comparisons when signs differ
-    if (lh_n < 0 and rh_n >= 0) {
-        return true;
-    }
-    if (lh_n >= 0 and rh_n < 0) {
-        return false;
-    }
-    if (lh_n < 0 and rh_n < 0) {
-        if (lh_d < 0 and rh_d >= 0) return true;
-        if (lh_d >= 0 and rh_d < 0) return false;
-    }
-    if (lh_n > 0 and rh_n > 0) {
-        if (lh_d < 0 and rh_d >= 0) return false;
-        if (lh_d >= 0 and rh_d < 0) return true;
-    }
+    quadrant: i32,
+    numerator: i32,
+    denominator: i32,
 
-    // handle zeroes for the numerator
-    if (lh_n == 0 and lh_d < 0) {
-        // lhs is never < rhs in this case (rh_n == 0 means lhs == rhs for hue)
-        return false;
-    }
-    if (rh_n == 0 and rh_d < 0) {
-        // lh_n == 0 implies lhs and rhs have the same hue
-        return lh_n != 0;
-    }
-    if ((lh_n == 0 and lh_d >= 0) or (rh_n == 0 and rh_d >= 0)) {
-        return lh_n < rh_n;
+    pub fn of(pixel: Pixel) HueAngle {
+        const numerator: i32 = @as(i32, pixel.green) - pixel.blue;
+        var denominator: i32 = 2 * @as(i32, pixel.red) - pixel.green - pixel.blue;
+        if (numerator == 0 and denominator == 0) {
+            denominator = 1;
+        }
+
+        const pos_num = numerator >= 0;
+        const pos_den = denominator >= 0;
+        // odd quadrant ordering but this preserves the ordering of older code
+        const quadrant: i32 = if (pos_num and pos_den)
+            2
+        else if (pos_num and !pos_den)
+            3
+        else if (!pos_num and !pos_den)
+            0
+        else
+            1;
+
+        return .{
+            .quadrant = quadrant,
+            .numerator = numerator,
+            .denominator = denominator,
+        };
     }
 
-    // finally compare lh_n / lh_d and rh_n / rh_d
-    // we know the signs are consistent at this point so
-    // n1 / d1 < n2 / d2 --> n1 * d2 < n2 * d1
-    const left = @as(i32, lh_n) * rh_d;
-    const right = @as(i32, rh_n) * lh_d;
-    return left < right;
+    pub fn lessThan(self: *const HueAngle, rhs: HueAngle) bool {
+        // Can quickly check quadrants first.
+        const lhs = self.*;
+        if (lhs.quadrant < rhs.quadrant) {
+            return true;
+        } else if (rhs.quadrant < lhs.quadrant) {
+            return false;
+        }
+
+        // Within a quadrant so the signs of the numerator and denominator line up.
+        // In this case (n1 / d1 < n2 / d2 ==> n1 * d2 < n2 * d1).
+        // And atan is monotonic within a quadrant so we can just perform that check.
+        const left = lhs.numerator * rhs.denominator;
+        const right = rhs.numerator * lhs.denominator;
+        return left < right;
+    }
+};
+
+/// Returns true if lhs < rhs according to the hue angle
+pub fn hueCompare(_: void, lhs: Pixel, rhs: Pixel) bool {
+    const left = HueAngle.of(lhs);
+    const right = HueAngle.of(rhs);
+    return left.lessThan(right);
 }
