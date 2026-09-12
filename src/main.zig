@@ -343,6 +343,19 @@ fn verifyFullImagePopulated(image: ImageData) bool {
     return true;
 }
 
+fn verifyUniquePixels(allocator: std.mem.Allocator, image: ImageData) !bool {
+    var found: std.AutoHashMapUnmanaged(Pixel, bool) = .{};
+    defer found.deinit(allocator);
+    for (0..image.buffer.len) |idx| {
+        const pixel = image.buffer[idx];
+        if (found.contains(pixel)) {
+            return false;
+        }
+        try found.put(allocator, pixel, true);
+    }
+    return true;
+}
+
 const ColourSort = enum {
     hue,
     hsp,
@@ -355,6 +368,7 @@ const Parameters = struct {
     starts: u16 = 0,
     sort_type: ColourSort = ColourSort.hue,
     output_file: []const u8 = "",
+    verify: bool,
 };
 
 fn parseArguments(args: std.process.Args) !Parameters {
@@ -362,6 +376,7 @@ fn parseArguments(args: std.process.Args) !Parameters {
     var starts: u16 = 1;
     var output_file: []const u8 = "out.png";
     var sort_type = ColourSort.hue;
+    var verify = false;
     var it = args.iterate();
 
     while (it.next()) |arg| {
@@ -381,6 +396,8 @@ fn parseArguments(args: std.process.Args) !Parameters {
             sort_type = ColourSort.zigzag;
         } else if (std.mem.eql(u8, "--none", arg)) {
             sort_type = ColourSort.none;
+        } else if (std.mem.eql(u8, "--verify", arg)) {
+            verify = true;
         }
     }
 
@@ -389,6 +406,7 @@ fn parseArguments(args: std.process.Args) !Parameters {
         .starts = starts,
         .output_file = output_file,
         .sort_type = sort_type,
+        .verify = verify,
     };
 }
 
@@ -420,8 +438,13 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("Error filling image: {any}\n", .{err});
     };
 
-    if (!verifyFullImagePopulated(image)) {
-        std.debug.print("Image verified\n", .{});
+    if (parameters.verify) {
+        if (!verifyFullImagePopulated(image)) {
+            std.debug.print("Image verified\n", .{});
+        }
+        if (!try verifyUniquePixels(allocator, image)) {
+            std.debug.print("Duplicate pixels detected\n", .{});
+        }
     }
 
     try png.writePng(
