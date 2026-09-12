@@ -69,17 +69,94 @@ const ColoursIterator = struct {
     }
 };
 
-fn createColours(allocator: std.mem.Allocator) ![]Pixel {
+const ChannelIterator = union(enum) {
+    repeat: RepeatingIterator,
+    reversing: ReversingIterator,
+
+    pub fn next(it: *ChannelIterator) usize {
+        return switch (it.*) {
+            inline else => |*impl| impl.next(),
+        };
+    }
+};
+
+const RepeatingIterator = struct {
+    count: usize = 256,
+    idx: usize = 0,
+    step: usize = 1,
+
+    pub fn next(it: *RepeatingIterator) usize {
+        const v = it.idx * it.step;
+        it.idx += 1;
+        it.idx %= it.count;
+        return v;
+    }
+
+    pub fn iter(self: *RepeatingIterator) ChannelIterator {
+        return .{
+            .self = self,
+            .next = RepeatingIterator.next,
+        };
+    }
+};
+
+const ReversingIterator = struct {
+    forwards: bool = true,
+    count: usize = 256,
+    idx: usize = 0,
+    step: usize = 1,
+
+    pub fn next(it: *ReversingIterator) usize {
+        const max = it.count - 1;
+        const v = it.idx * it.step;
+        if (it.forwards and it.idx == max) {
+            it.forwards = false;
+        } else if (!it.forwards and it.idx == 0) {
+            it.forwards = true;
+        } else if (it.forwards) {
+            it.idx += 1;
+        } else {
+            it.idx -= 1;
+        }
+        return v;
+    }
+
+    pub fn iter(self: *ReversingIterator) ChannelIterator {
+        return .{
+            .self = self,
+            .next = &ReversingIterator.next,
+        };
+    }
+};
+
+fn createColours(allocator: std.mem.Allocator, zigzag: bool) ![]Pixel {
     var colours: []Pixel = try allocator.alloc(Pixel, DATA_SIZE);
     var idx: usize = 0;
     const step = 256 / CHANNEL_SIZE;
-    for (0..CHANNEL_SIZE) |red| {
-        for (0..CHANNEL_SIZE) |green| {
-            for (0..CHANNEL_SIZE) |blue| {
+
+    var red_it: ChannelIterator = undefined;
+    var green_it: ChannelIterator = undefined;
+    var blue_it: ChannelIterator = undefined;
+    if (zigzag) {
+        red_it = .{ .reversing = .{ .count = CHANNEL_SIZE, .step = step } };
+        green_it = .{ .reversing = .{ .count = CHANNEL_SIZE, .step = step } };
+        blue_it = .{ .reversing = .{ .count = CHANNEL_SIZE, .step = step } };
+    } else {
+        red_it = .{ .repeat = .{ .count = CHANNEL_SIZE, .step = step } };
+        green_it = .{ .repeat = .{ .count = CHANNEL_SIZE, .step = step } };
+        blue_it = .{ .repeat = .{ .count = CHANNEL_SIZE, .step = step } };
+    }
+
+    for (0..CHANNEL_SIZE) |_| {
+        const red = red_it.next();
+        for (0..CHANNEL_SIZE) |_| {
+            const green = green_it.next();
+            for (0..CHANNEL_SIZE) |_| {
+                const blue = blue_it.next();
                 const pixel: Pixel = .{
-                    .red = @truncate(red * step),
-                    .green = @truncate(green * step),
-                    .blue = @truncate(blue * step),
+                    .red = @truncate(red),
+                    .green = @truncate(green),
+                    .blue = @truncate(blue),
                     .alpha = 0xFF,
                 };
                 colours[idx] = pixel;
@@ -269,6 +346,8 @@ fn verifyFullImagePopulated(image: ImageData) bool {
 const ColourSort = enum {
     hue,
     hsp,
+    zigzag,
+    none,
 };
 
 const Parameters = struct {
@@ -298,6 +377,10 @@ fn parseArguments(args: std.process.Args) !Parameters {
             sort_type = ColourSort.hue;
         } else if (std.mem.eql(u8, "--hsp", arg)) {
             sort_type = ColourSort.hsp;
+        } else if (std.mem.eql(u8, "--zigzag", arg)) {
+            sort_type = ColourSort.zigzag;
+        } else if (std.mem.eql(u8, "--none", arg)) {
+            sort_type = ColourSort.none;
         }
     }
 
@@ -318,10 +401,13 @@ pub fn main(init: std.process.Init) !void {
 
     const parameters = try parseArguments(init.minimal.args);
 
-    const colours = try createColours(allocator);
+    const colours = try createColours(allocator, parameters.sort_type == ColourSort.zigzag);
+
     switch (parameters.sort_type) {
         .hue => std.mem.sort(Pixel, colours, {}, hueCompare),
         .hsp => std.mem.sort(Pixel, colours, {}, hspCompare),
+        .zigzag => {}, // this is really for generation order
+        .none => {},
     }
 
     const buffer = try allocator.alloc(Pixel, DATA_SIZE);
