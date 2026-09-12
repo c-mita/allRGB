@@ -5,12 +5,6 @@ const Pixel = @import("colours.zig").Pixel;
 const hspCompare = @import("colours.zig").hspCompare;
 const hueCompare = @import("colours.zig").hueCompare;
 
-const BIT_DEPTH = 8;
-const CHANNEL_SIZE = 1 << BIT_DEPTH;
-const DATA_SIZE = CHANNEL_SIZE * CHANNEL_SIZE * CHANNEL_SIZE;
-const IMAGE_X = 4096;
-const IMAGE_Y = 4096;
-
 const ImageData = struct {
     buffer: []Pixel,
     size_x: usize,
@@ -129,29 +123,31 @@ const ReversingIterator = struct {
     }
 };
 
-fn createColours(allocator: std.mem.Allocator, zigzag: bool) ![]Pixel {
-    var colours: []Pixel = try allocator.alloc(Pixel, DATA_SIZE);
+fn createColours(allocator: std.mem.Allocator, channel_depth: u8, zigzag: bool) ![]Pixel {
+    const channel_size: usize = @as(usize, 1) << @as(u4, @intCast(channel_depth));
+    const data_size = channel_size * channel_size * channel_size;
+    var colours: []Pixel = try allocator.alloc(Pixel, data_size);
     var idx: usize = 0;
-    const step = 256 / CHANNEL_SIZE;
+    const step = 256 / channel_size;
 
     var red_it: ChannelIterator = undefined;
     var green_it: ChannelIterator = undefined;
     var blue_it: ChannelIterator = undefined;
     if (zigzag) {
-        red_it = .{ .reversing = .{ .count = CHANNEL_SIZE, .step = step } };
-        green_it = .{ .reversing = .{ .count = CHANNEL_SIZE, .step = step } };
-        blue_it = .{ .reversing = .{ .count = CHANNEL_SIZE, .step = step } };
+        red_it = .{ .reversing = .{ .count = channel_size, .step = step } };
+        green_it = .{ .reversing = .{ .count = channel_size, .step = step } };
+        blue_it = .{ .reversing = .{ .count = channel_size, .step = step } };
     } else {
-        red_it = .{ .repeat = .{ .count = CHANNEL_SIZE, .step = step } };
-        green_it = .{ .repeat = .{ .count = CHANNEL_SIZE, .step = step } };
-        blue_it = .{ .repeat = .{ .count = CHANNEL_SIZE, .step = step } };
+        red_it = .{ .repeat = .{ .count = channel_size, .step = step } };
+        green_it = .{ .repeat = .{ .count = channel_size, .step = step } };
+        blue_it = .{ .repeat = .{ .count = channel_size, .step = step } };
     }
 
-    for (0..CHANNEL_SIZE) |_| {
+    for (0..channel_size) |_| {
         const red = red_it.next();
-        for (0..CHANNEL_SIZE) |_| {
+        for (0..channel_size) |_| {
             const green = green_it.next();
-            for (0..CHANNEL_SIZE) |_| {
+            for (0..channel_size) |_| {
                 const blue = blue_it.next();
                 const pixel: Pixel = .{
                     .red = @truncate(red),
@@ -289,9 +285,10 @@ fn fillImage(
     var c_count: usize = starts;
     var in_tree: usize = starts;
     var since_rebuild: usize = 0;
+    const percent_mod = @max(1, colours.len / 100);
     while (colours_it.next()) |colour| {
         since_rebuild += 1;
-        if (c_count % (colours.len / 100) == 0) {
+        if (c_count % percent_mod == 0) {
             std.debug.print("Progress: {d} - Tree leaves: {d} - Empty: {d} - Elements: {d} - Placed: {d}\n", .{
                 percentage,
                 tree.leaf_count,
@@ -382,6 +379,7 @@ const Parameters = struct {
     sort_type: ColourSort = ColourSort.hue,
     output_file: []const u8 = "",
     verify: bool,
+    channel_depth: u8 = 0,
 };
 
 fn parseArguments(args: std.process.Args) !Parameters {
@@ -390,6 +388,7 @@ fn parseArguments(args: std.process.Args) !Parameters {
     var output_file: []const u8 = "out.png";
     var sort_type = ColourSort.hue;
     var verify = false;
+    var channel_depth: u8 = 8;
     var it = args.iterate();
 
     while (it.next()) |arg| {
@@ -411,6 +410,16 @@ fn parseArguments(args: std.process.Args) !Parameters {
             sort_type = ColourSort.none;
         } else if (std.mem.eql(u8, "--verify", arg)) {
             verify = true;
+        } else if (std.mem.eql(u8, "--depth", arg)) {
+            const depth_str = it.next() orelse return error.InvalidArguments;
+            channel_depth = std.fmt.parseInt(u8, depth_str, 10) catch return error.InvalidArguments;
+            if (channel_depth > 8) {
+                std.debug.print("Maximum channel depth is 8\n", .{});
+                return error.InvalidArguments;
+            } else if (channel_depth == 0) {
+                std.debug.print("Minimum channel depth is 1\n", .{});
+                return error.InvalidArguments;
+            }
         }
     }
 
@@ -420,7 +429,29 @@ fn parseArguments(args: std.process.Args) !Parameters {
         .output_file = output_file,
         .sort_type = sort_type,
         .verify = verify,
+        .channel_depth = channel_depth,
     };
+}
+
+fn imageSizeFromBitDepth(channel_depth: u8) struct { u32, u32 } {
+    var size_x: u32 = 4096;
+    var size_y: u32 = 4096;
+    if (channel_depth >= 8) {
+        return .{ size_x, size_y };
+    }
+    const steps = 8 - channel_depth;
+    // every drop of 1 bit means our image shrinks by a factor of 8
+    for (0..steps) |_| {
+        // shrink the larger dimension twice
+        if (size_x <= size_y) {
+            size_x >>= 1;
+            size_y >>= 2;
+        } else {
+            size_y >>= 1;
+            size_x >>= 2;
+        }
+    }
+    return .{ size_x, size_y };
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -432,7 +463,7 @@ pub fn main(init: std.process.Init) !void {
 
     const parameters = try parseArguments(init.minimal.args);
 
-    const colours = try createColours(allocator, parameters.sort_type == ColourSort.zigzag);
+    const colours = try createColours(allocator, parameters.channel_depth, parameters.sort_type == ColourSort.zigzag);
 
     switch (parameters.sort_type) {
         .hue => std.mem.sort(Pixel, colours, {}, hueCompare),
@@ -441,12 +472,15 @@ pub fn main(init: std.process.Init) !void {
         .none => {},
     }
 
-    const buffer = try allocator.alloc(Pixel, DATA_SIZE);
+    const size_x, const size_y = imageSizeFromBitDepth(parameters.channel_depth);
+
+    const buffer = try allocator.alloc(Pixel, colours.len);
     var image = ImageData{
         .buffer = buffer,
-        .size_x = IMAGE_X,
-        .size_y = IMAGE_Y,
+        .size_x = size_x,
+        .size_y = size_y,
     };
+    std.debug.print("Producing a {d}x{d} image\n", .{ size_x, size_y });
     fillImage(gen_alloc, colours, &image, parameters.starts, parameters.seed) catch |err| {
         std.debug.print("Error filling image: {any}\n", .{err});
     };
@@ -465,7 +499,7 @@ pub fn main(init: std.process.Init) !void {
         init.io,
         buffer,
         parameters.output_file,
-        IMAGE_X,
-        IMAGE_Y,
+        size_x,
+        size_y,
     );
 }
