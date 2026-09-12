@@ -286,20 +286,30 @@ fn fillImage(
         image.put(initial_coord, initial_pixel);
     }
     var percentage: i32 = 1;
-    var c_count: usize = 0;
+    var c_count: usize = starts;
+    var in_tree: usize = starts;
+    var since_rebuild: usize = 0;
     while (colours_it.next()) |colour| {
-        c_count += 1;
+        since_rebuild += 1;
         if (c_count % (colours.len / 100) == 0) {
-            std.debug.print("Progress: {d} - Tree leaves: {d}\n", .{ percentage, tree.leaf_count });
+            std.debug.print("Progress: {d} - Tree leaves: {d} - Empty: {d} - Elements: {d} - Placed: {d}\n", .{
+                percentage,
+                tree.leaf_count,
+                tree.empty_leaf_count,
+                in_tree,
+                c_count,
+            });
             percentage += 1;
         }
+        c_count += 1;
         const empties = tree.empty_leaf_count;
         const ratio: f32 = @as(f32, @floatFromInt(empties)) / @as(f32, @floatFromInt(tree.leaf_count));
-        const rebuild = empties > 1 and ratio >= 0.05;
+        const rebuild = (empties > 1 and ratio >= 0.1) or (since_rebuild > 1024 * 1024);
         if (rebuild) {
             std.debug.print("Rebuilding tree - leaves: {any} - empty {any}\n", .{ tree.leaf_count, tree.empty_leaf_count });
             _ = tree_alloc.reset(.retain_capacity);
             tree = try populateNewTree(tree_allocator, image.*);
+            since_rebuild = 0;
         }
 
         var slot: ImageCoord = .{ .x = 0, .y = 0 };
@@ -312,11 +322,13 @@ fn fillImage(
             const available = getAvailableNeighbours(image.*, closest_idx, &buffer);
             if (available.len == 0) {
                 try tree.remove(closest_pixel);
+                in_tree -= 1;
                 continue;
             }
             // we're about to remove this pixel's last available neighbour
             if (available.len == 1) {
                 try tree.remove(closest_pixel);
+                in_tree -= 1;
             }
             const pick_idx = rng.intRangeLessThan(usize, 0, available.len);
             slot = available[pick_idx];
@@ -326,6 +338,7 @@ fn fillImage(
         image.put(slot, colour);
         if (getFirstNeighbour(image.*, slot) != null) {
             try tree.add(tree_allocator, colour, slot);
+            in_tree += 1;
         }
     }
 }
