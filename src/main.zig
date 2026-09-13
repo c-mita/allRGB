@@ -264,6 +264,7 @@ fn fillImage(
     image: *ImageData,
     starts: u16,
     stride: u8,
+    approximate: bool,
     seed: u32,
 ) !void {
     var prng = std.Random.DefaultPrng.init(seed);
@@ -322,8 +323,13 @@ fn fillImage(
 
         var slot: ImageCoord = .{ .x = 0, .y = 0 };
         var pixel: Pixel = .{};
+        const search_function = if (approximate)
+            &kd_tree.KdTree(Pixel, ImageCoord).getNear
+        else
+            &kd_tree.KdTree(Pixel, ImageCoord).getNearest;
         while (true) {
-            const closest_pixel, const closest_idx = tree.getNearest(
+            const closest_pixel, const closest_idx = search_function(
+                &tree,
                 colour,
             ) orelse return error.InvalidStateEmptyTree;
             var buffer = std.mem.zeroes([8]ImageCoord);
@@ -392,6 +398,7 @@ const Parameters = struct {
     verify: bool,
     channel_depth: u8 = 0,
     stride: u8 = 1,
+    approximate: bool = false,
 };
 
 fn parseArguments(args: std.process.Args) !Parameters {
@@ -402,6 +409,7 @@ fn parseArguments(args: std.process.Args) !Parameters {
     var verify = false;
     var channel_depth: u8 = 8;
     var stride: u8 = 1;
+    var approximate: bool = false;
     var it = args.iterate();
 
     while (it.next()) |arg| {
@@ -436,6 +444,8 @@ fn parseArguments(args: std.process.Args) !Parameters {
         } else if (std.mem.eql(u8, "--stride", arg)) {
             const stride_str = it.next() orelse return error.InvalidArguments;
             stride = std.fmt.parseInt(u8, stride_str, 10) catch return error.InvalidArguments;
+        } else if (std.mem.eql(u8, "--approx", arg)) {
+            approximate = true;
         }
     }
 
@@ -447,6 +457,7 @@ fn parseArguments(args: std.process.Args) !Parameters {
         .verify = verify,
         .channel_depth = channel_depth,
         .stride = stride,
+        .approximate = approximate,
     };
 }
 
@@ -498,7 +509,15 @@ pub fn main(init: std.process.Init) !void {
         .size_y = size_y,
     };
     std.debug.print("Producing a {d}x{d} image\n", .{ size_x, size_y });
-    fillImage(gen_alloc, colours, &image, parameters.starts, parameters.stride, parameters.seed) catch |err| {
+    fillImage(
+        gen_alloc,
+        colours,
+        &image,
+        parameters.starts,
+        parameters.stride,
+        parameters.approximate,
+        parameters.seed,
+    ) catch |err| {
         std.debug.print("Error filling image: {any}\n", .{err});
     };
 

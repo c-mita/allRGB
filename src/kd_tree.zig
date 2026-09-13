@@ -221,6 +221,19 @@ fn KdTreeNode(comptime K: type, comptime V: type) type {
             }
         }
 
+        /// Only every queries the "other" side of the spit if there are no
+        /// keys on the same side as the split as the query node.
+        fn getNear(self: *const KdTreeNode(K, V), key: K) ?struct { K, V } {
+            if (self.leaf != null) {
+                return self.leaf.?.getNearest(key);
+            }
+            const distance_to_split = key.distanceToSplit(self.split_axis, self.split_value);
+            const first = if (distance_to_split < 0) self.left.? else self.right.?;
+            const second = if (distance_to_split < 0) self.right.? else self.left.?;
+
+            return first.getNear(key) orelse second.getNear(key);
+        }
+
         fn clear(self: *KdTreeNode(K, V), allocator: std.mem.Allocator) void {
             if (self.leaf != null) {
                 allocator.destroy(self.leaf.?);
@@ -243,8 +256,17 @@ pub fn KdTree(comptime K: type, comptime V: type) type {
         leaf_count: usize = 0,
         empty_leaf_count: usize = 0,
 
+        /// Returns the closest match to the input key in the tree.
         pub fn getNearest(self: *KdTree(K, V), key: K) ?struct { K, V } {
             return if (self.root != null) self.root.?.getNearest(key) else null;
+        }
+
+        /// Returns a potentially "near" match to the input key. If a match
+        /// is found in the same "subspace" as the key then return it (only if
+        /// there is no match on the same side of a splitting plane as the key
+        /// will the other side be searched).
+        pub fn getNear(self: *KdTree(K, V), key: K) ?struct { K, V } {
+            return if (self.root != null) self.root.?.getNear(key) else null;
         }
 
         /// Adds a key value pair to the tree
