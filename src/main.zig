@@ -38,30 +38,39 @@ const ImageCoord = struct {
     y: usize,
 };
 
-const ColoursIterator = struct {
-    buffer: []const Pixel,
-    start: usize = 0,
-    count: usize = 0,
-    len: usize = 0,
+fn StridedIterator(comptime T: type) type {
+    return struct {
+        data: []const T,
+        start: usize = 0,
+        count: usize = 0,
+        strides: usize = 1,
+        current_stride: usize = 0,
 
-    pub fn next(it: *ColoursIterator) ?Pixel {
-        if (it.count >= it.len) {
-            return null;
+        pub fn next(it: *StridedIterator(T)) ?T {
+            if (it.count >= it.data.len) {
+                it.current_stride += 1;
+                if (it.current_stride >= it.strides) {
+                    return null;
+                }
+                it.count = it.current_stride;
+            }
+            const current = (it.start + it.count) % it.data.len;
+            it.count += it.strides;
+            return it.data[current];
         }
-        const current = (it.start + it.count) % it.buffer.len;
-        it.count += 1;
-        return it.buffer[current];
-    }
 
-    pub fn iterateColours(colours: []const Pixel, start: usize) ColoursIterator {
-        return .{
-            .buffer = colours,
-            .start = start,
-            .count = 0,
-            .len = colours.len,
-        };
-    }
-};
+        pub fn iterate(data: []const T, start: usize, stride: usize) StridedIterator(T) {
+            const clamped_stride = if (stride > 0) stride else 1;
+            return .{
+                .data = data,
+                .start = start,
+                .count = 0,
+                .strides = clamped_stride,
+                .current_stride = 0,
+            };
+        }
+    };
+}
 
 const ChannelIterator = union(enum) {
     repeat: RepeatingIterator,
@@ -254,6 +263,7 @@ fn fillImage(
     colours: []const Pixel,
     image: *ImageData,
     starts: u16,
+    stride: u8,
     seed: u32,
 ) !void {
     var prng = std.Random.DefaultPrng.init(seed);
@@ -267,9 +277,10 @@ fn fillImage(
     var tree = kd_tree.KdTree(Pixel, ImageCoord){};
 
     const start_idx = rng.intRangeLessThan(usize, 0, colours.len);
-    var colours_it = ColoursIterator.iterateColours(
+    var colours_it = StridedIterator(Pixel).iterate(
         colours,
         start_idx,
+        stride,
     );
 
     // place the initial pixels and seed the tree
@@ -380,6 +391,7 @@ const Parameters = struct {
     output_file: []const u8 = "",
     verify: bool,
     channel_depth: u8 = 0,
+    stride: u8 = 1,
 };
 
 fn parseArguments(args: std.process.Args) !Parameters {
@@ -389,6 +401,7 @@ fn parseArguments(args: std.process.Args) !Parameters {
     var sort_type = ColourSort.hue;
     var verify = false;
     var channel_depth: u8 = 8;
+    var stride: u8 = 1;
     var it = args.iterate();
 
     while (it.next()) |arg| {
@@ -420,6 +433,9 @@ fn parseArguments(args: std.process.Args) !Parameters {
                 std.debug.print("Minimum channel depth is 1\n", .{});
                 return error.InvalidArguments;
             }
+        } else if (std.mem.eql(u8, "--stride", arg)) {
+            const stride_str = it.next() orelse return error.InvalidArguments;
+            stride = std.fmt.parseInt(u8, stride_str, 10) catch return error.InvalidArguments;
         }
     }
 
@@ -430,6 +446,7 @@ fn parseArguments(args: std.process.Args) !Parameters {
         .sort_type = sort_type,
         .verify = verify,
         .channel_depth = channel_depth,
+        .stride = stride,
     };
 }
 
@@ -481,7 +498,7 @@ pub fn main(init: std.process.Init) !void {
         .size_y = size_y,
     };
     std.debug.print("Producing a {d}x{d} image\n", .{ size_x, size_y });
-    fillImage(gen_alloc, colours, &image, parameters.starts, parameters.seed) catch |err| {
+    fillImage(gen_alloc, colours, &image, parameters.starts, parameters.stride, parameters.seed) catch |err| {
         std.debug.print("Error filling image: {any}\n", .{err});
     };
 
@@ -502,4 +519,58 @@ pub fn main(init: std.process.Init) !void {
         size_x,
         size_y,
     );
+}
+
+test "Strided iterator unstrided" {
+    const test_alloc = std.testing.allocator;
+    var arena_alloc = std.heap.ArenaAllocator.init(test_alloc);
+    defer arena_alloc.deinit();
+    const allocator = arena_alloc.allocator();
+
+    const data = &[_]i32{ 1, 2, 3, 4, 5, 6, 7, 8 };
+    var it = StridedIterator(i32).iterate(data, 0, 1);
+
+    var it_out: std.ArrayList(i32) = .empty;
+    while (it.next()) |v| {
+        try it_out.append(allocator, v);
+    }
+
+    try std.testing.expectEqualSlices(i32, data, it_out.items);
+}
+
+test "Strided iterator with offset" {
+    const test_alloc = std.testing.allocator;
+    var arena_alloc = std.heap.ArenaAllocator.init(test_alloc);
+    defer arena_alloc.deinit();
+    const allocator = arena_alloc.allocator();
+
+    const data = &[_]i32{ 1, 2, 3, 4, 5, 6, 7, 8 };
+    var it = StridedIterator(i32).iterate(data, 3, 1);
+
+    var it_out: std.ArrayList(i32) = .empty;
+    while (it.next()) |v| {
+        try it_out.append(allocator, v);
+    }
+
+    const expected = &[_]i32{ 4, 5, 6, 7, 8, 1, 2, 3 };
+    try std.testing.expectEqualSlices(i32, expected, it_out.items);
+}
+
+test "Strided iterator stride and offset" {
+    const test_alloc = std.testing.allocator;
+    var arena_alloc = std.heap.ArenaAllocator.init(test_alloc);
+    defer arena_alloc.deinit();
+    const allocator = arena_alloc.allocator();
+
+    const data = &[_]i32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 };
+    var it = StridedIterator(i32).iterate(data, 5, 3);
+
+    var it_out: std.ArrayList(i32) = .empty;
+    while (it.next()) |v| {
+        try it_out.append(allocator, v);
+    }
+
+    const expected = &[_]i32{ 6, 9, 12, 1, 4, 7, 10, 13, 2, 5, 8, 11, 14, 3 };
+    try std.testing.expectEqual(data.len, expected.len);
+    try std.testing.expectEqualSlices(i32, expected, it_out.items);
 }
