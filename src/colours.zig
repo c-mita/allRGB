@@ -160,3 +160,25 @@ pub fn hueCompare(_: void, lhs: Pixel, rhs: Pixel) bool {
     const right = HueAngle.of(rhs);
     return left.lessThan(right);
 }
+
+pub fn zOrderCompare(_: void, lhs: Pixel, rhs: Pixel) bool {
+    // The Morton Z-Order Curve is the result of interleaving the bits of the
+    // RGB values.
+    // So [r1..r8][g1..g8][b1..b8] becomes
+    // [r1g1b1, r2g2b2, ... r8g8b8]
+    // But we're just doing a comparison so we only need to find the most
+    // significant bit of the difference between the values for each channel.
+    const lhs_data = &[_]u8{ lhs.red, lhs.green, lhs.blue };
+    const rhs_data = &[_]u8{ rhs.red, rhs.green, rhs.blue };
+    var channel: usize = 0;
+    for (1..lhs_data.len) |channel_idx| {
+        const lhs_v = lhs_data[channel_idx];
+        const rhs_v = rhs_data[channel_idx];
+        const current_diff = lhs_v ^ rhs_v;
+        const best_diff = lhs_data[channel] ^ rhs_data[channel];
+        if ((8 - @clz(current_diff)) > (8 - @clz(best_diff))) {
+            channel = channel_idx;
+        }
+    }
+    return lhs_data[channel] < rhs_data[channel];
+}

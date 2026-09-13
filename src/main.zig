@@ -4,6 +4,7 @@ const kd_tree = @import("kd_tree.zig");
 const Pixel = @import("colours.zig").Pixel;
 const hspCompare = @import("colours.zig").hspCompare;
 const hueCompare = @import("colours.zig").hueCompare;
+const zOrderCompare = @import("colours.zig").zOrderCompare;
 
 const ImageData = struct {
     buffer: []Pixel,
@@ -387,6 +388,7 @@ const ColourSort = enum {
     hue,
     hsp,
     zigzag,
+    zorder,
     none,
 };
 
@@ -427,6 +429,8 @@ fn parseArguments(args: std.process.Args) !Parameters {
             sort_type = ColourSort.hsp;
         } else if (std.mem.eql(u8, "--zigzag", arg)) {
             sort_type = ColourSort.zigzag;
+        } else if (std.mem.eql(u8, "--zorder", arg)) {
+            sort_type = ColourSort.zorder;
         } else if (std.mem.eql(u8, "--none", arg)) {
             sort_type = ColourSort.none;
         } else if (std.mem.eql(u8, "--verify", arg)) {
@@ -497,6 +501,7 @@ pub fn main(init: std.process.Init) !void {
         .hue => std.mem.sort(Pixel, colours, {}, hueCompare),
         .hsp => std.mem.sort(Pixel, colours, {}, hspCompare),
         .zigzag => {}, // this is really for generation order
+        .zorder => std.mem.sort(Pixel, colours, {}, zOrderCompare),
         .none => {},
     }
 
