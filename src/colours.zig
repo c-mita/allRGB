@@ -14,6 +14,17 @@ pub const Pixel = struct {
         return rdiff * rdiff + gdiff * gdiff + bdiff * bdiff;
     }
 
+    pub fn distance(lhs: Pixel, rhs: Pixel) usize {
+        return @intCast(lhs.distanceSquared(rhs));
+    }
+
+    pub fn l1Distance(lhs: Pixel, rhs: Pixel) usize {
+        const rdiff = if (lhs.red > rhs.red) lhs.red - rhs.red else rhs.red - lhs.red;
+        const gdiff = if (lhs.green > rhs.green) lhs.green - rhs.green else rhs.green - lhs.green;
+        const bdiff = if (lhs.blue > rhs.blue) lhs.blue - rhs.blue else rhs.blue - lhs.blue;
+        return @as(usize, rdiff) + @as(usize, gdiff) + @as(usize, bdiff);
+    }
+
     /// The signed distance between this point and the splitting plane.
     /// Result is simply self.[red|green|blue] - point
     pub fn distanceToSplit(self: *const Pixel, axis: u32, point: u8) i32 {

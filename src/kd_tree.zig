@@ -1,91 +1,10 @@
 const std = @import("std");
 const colours = @import("colours.zig");
 
-const LEAF_SIZE = 128;
+const Bucket = @import("bucket.zig").Bucket;
 
-/// A bucket for key-value pairs to be used as a leaf node of the KD tree.
 fn KdTreeLeaf(comptime K: type, comptime V: type) type {
-    return struct {
-        keys: [LEAF_SIZE]K = std.mem.zeroes([LEAF_SIZE]K),
-        values: [LEAF_SIZE]V = std.mem.zeroes([LEAF_SIZE]V),
-        count: u8 = 0,
-
-        /// Sets the value for the given key within this leaf.
-        /// Returns an error if the leaf is full and needs to be split.
-        fn putValue(self: *KdTreeLeaf(K, V), key: K, value: V) !void {
-            if (self.count == self.keys.len) {
-                return error.KdTreeLeafFull;
-            }
-            const idx = self.findForInsertion(key);
-            self.keys[idx] = key;
-            self.values[idx] = value;
-            if (idx == self.count) {
-                self.count += 1;
-            }
-        }
-
-        /// Force puts a new key value without checking for duplicates.
-        /// Only use when certain there are no duplicates.
-        fn simplePut(self: *KdTreeLeaf(K, V), key: K, value: V) !void {
-            if (self.count == self.keys.len) {
-                return error.KdTreeLeafFull;
-            }
-            const idx = self.count;
-            self.keys[idx] = key;
-            self.values[idx] = value;
-            self.count += 1;
-        }
-
-        /// Returns the value associate with this key.
-        fn getValue(self: *KdTreeLeaf(K, V), key: K) ?V {
-            for (0..self.count) |idx| {
-                if (std.meta.eql(key, self.keys[idx])) {
-                    return self.values[idx];
-                }
-            }
-            return null;
-        }
-
-        /// Returns the key closest to the given key in this leaf.
-        fn getNearest(self: *KdTreeLeaf(K, V), key: K) ?struct { K, V } {
-            var nearest: ?struct { K, V } = null;
-            var d_min: i32 = 0x7FFFFFFF;
-            for (0..self.count) |idx| {
-                const candidate = self.keys[idx];
-                const distance = key.distanceSquared(candidate);
-                if (distance < d_min) {
-                    d_min = distance;
-                    nearest = .{ candidate, self.values[idx] };
-                }
-            }
-            return nearest;
-        }
-
-        /// Returns the index into this leaf for the key to insert.
-        /// If the key already exists it returns the occupied slot.
-        fn findForInsertion(self: *KdTreeLeaf(K, V), key: K) usize {
-            for (0..self.count) |idx| {
-                if (std.meta.eql(self.keys[idx], key)) {
-                    return idx;
-                }
-            }
-            return self.count;
-        }
-
-        /// Removes the first instance of the passed in value
-        fn removeKey(self: *KdTreeLeaf(K, V), key: K) !void {
-            for (0..self.count) |idx| {
-                if (std.meta.eql(key, self.keys[idx])) {
-                    @memmove(self.keys[idx .. self.keys.len - 1], self.keys[idx + 1 ..]);
-                    @memmove(self.values[idx .. self.values.len - 1], self.values[idx + 1 ..]);
-                    self.count -= 1;
-                    return;
-                }
-            } else {
-                return error.KdTreeKeyNotFound;
-            }
-        }
-    };
+    return Bucket(K, V, K.distance);
 }
 
 fn KdTreeNode(comptime K: type, comptime V: type) type {
@@ -310,63 +229,6 @@ pub fn KdTree(comptime K: type, comptime V: type) type {
     };
 }
 
-test "KdTreeLeaf add" {
-    var leaf: KdTreeLeaf(i32, i32) = .{};
-
-    try leaf.putValue(17, 1024);
-    try leaf.putValue(19, 96);
-
-    try std.testing.expectEqual(2, leaf.count);
-    try std.testing.expectEqual(1024, leaf.getValue(17));
-    try std.testing.expectEqual(96, leaf.getValue(19));
-}
-
-test "KdTreeLeaf remove" {
-    const px1 = colours.Pixel{ .red = 1 };
-    const px2 = colours.Pixel{ .red = 2 };
-    const px3 = colours.Pixel{ .red = 3 };
-    var leaf = KdTreeLeaf(colours.Pixel, i32){};
-
-    try leaf.putValue(px1, 1);
-    try leaf.putValue(px2, 2);
-    try leaf.putValue(px3, 3);
-    try leaf.removeKey(px2);
-
-    try std.testing.expectEqual(2, leaf.count);
-    try std.testing.expectEqual(1, leaf.getValue(px1));
-    try std.testing.expectEqual(null, leaf.getValue(px2));
-    try std.testing.expectEqual(3, leaf.getValue(px3));
-}
-
-test "KdTreeLeaf nearest" {
-    const px1 = colours.Pixel{ .red = 10, .green = 10 };
-    const px2 = colours.Pixel{ .red = 10, .green = 100 };
-    const px3 = colours.Pixel{ .blue = 200 };
-    const px4 = colours.Pixel{ .red = 10, .green = 50, .blue = 20 };
-    var leaf = KdTreeLeaf(colours.Pixel, i32){};
-
-    try leaf.putValue(px1, 1);
-    try leaf.putValue(px2, 2);
-    try leaf.putValue(px3, 3);
-    try leaf.putValue(px4, 4);
-
-    try std.testing.expectEqual(.{ px2, 2 }, leaf.getNearest(.{ .green = 75 }));
-    try std.testing.expectEqual(.{ px3, 3 }, leaf.getNearest(.{ .blue = 110 }));
-    try std.testing.expectEqual(.{ px1, 1 }, leaf.getNearest(.{ .blue = 5 }));
-}
-
-test "KdTreeLeaf duplicate" {
-    const pixel = colours.Pixel{ .red = 17, .green = 19, .blue = 3 };
-    var leaf = KdTreeLeaf(colours.Pixel, i32){};
-
-    try leaf.putValue(pixel, 16);
-    try leaf.putValue(pixel, 1);
-    try leaf.putValue(pixel, 17);
-
-    try std.testing.expectEqual(1, leaf.count);
-    try std.testing.expectEqual(.{ pixel, 17 }, leaf.getNearest(colours.Pixel{}));
-}
-
 test "KdTreeNode lookup found on left" {
     const test_alloc = std.testing.allocator;
     var arena_alloc = std.heap.ArenaAllocator.init(test_alloc);
@@ -460,23 +322,24 @@ test "KdNode split on full" {
     defer arena_alloc.deinit();
     const allocator = arena_alloc.allocator();
 
-    var node = try KdTreeNode(colours.Pixel, i32).initLeafNode(allocator);
+    var node = try KdTreeNode(colours.Pixel, usize).initLeafNode(allocator);
 
-    for (0..LEAF_SIZE * 2) |idx| {
+    const leaf_size = node.leaf.?.values.len;
+    for (0..leaf_size * 2) |idx| {
         const v: u8 = @intCast(idx);
         _ = try node.add(allocator, .{ .green = v }, @intCast(idx));
     }
     // Because our pixels are added in ascending order we expect a tree
     // biased to the right
-    const half_leaf = LEAF_SIZE / 2;
+    const half_leaf = leaf_size / 2;
     try std.testing.expectEqual(half_leaf, node.left.?.leaf.?.count);
     try std.testing.expectEqual(0, node.left.?.leaf.?.values[0]);
     try std.testing.expectEqual(half_leaf, node.right.?.left.?.leaf.?.count);
     try std.testing.expectEqual(half_leaf, node.right.?.left.?.leaf.?.values[0]);
-    try std.testing.expectEqual(LEAF_SIZE - 1, node.right.?.left.?.leaf.?.values[half_leaf - 1]);
-    try std.testing.expectEqual(LEAF_SIZE, node.right.?.right.?.leaf.?.count);
-    try std.testing.expectEqual(LEAF_SIZE, node.right.?.right.?.leaf.?.values[0]);
-    try std.testing.expectEqual(LEAF_SIZE * 2 - 1, node.right.?.right.?.leaf.?.values[LEAF_SIZE - 1]);
+    try std.testing.expectEqual(leaf_size - 1, node.right.?.left.?.leaf.?.values[half_leaf - 1]);
+    try std.testing.expectEqual(leaf_size, node.right.?.right.?.leaf.?.count);
+    try std.testing.expectEqual(leaf_size, node.right.?.right.?.leaf.?.values[0]);
+    try std.testing.expectEqual(leaf_size * 2 - 1, node.right.?.right.?.leaf.?.values[leaf_size - 1]);
 }
 
 test "KdTree lookup" {
