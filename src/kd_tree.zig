@@ -106,6 +106,16 @@ fn KdTreeNode(comptime K: type, comptime V: type) type {
             self.split_value = split_point;
         }
 
+        fn get(self: *const KdTreeNode(K, V), key: K) ?V {
+            const node = self.getNodeForKey(key);
+            return node.leaf.?.getValue(key);
+        }
+
+        fn getMutable(self: *KdTreeNode(K, V), key: K) ?*V {
+            const node = self.getNodeForKey(key);
+            return node.leaf.?.getValuePtr(key);
+        }
+
         fn getNearest(self: *const KdTreeNode(K, V), key: K) ?struct { K, V } {
             if (self.leaf != null) {
                 return self.leaf.?.getNearest(key);
@@ -174,6 +184,15 @@ pub fn KdTree(comptime K: type, comptime V: type) type {
         root: ?*KdTreeNode(K, V) = null,
         leaf_count: usize = 0,
         empty_leaf_count: usize = 0,
+
+        /// Gets the value associated with this exact key.
+        pub fn get(self: *KdTree(K, V), key: K) ?V {
+            return if (self.root != null) self.root.?.get(key) else null;
+        }
+
+        pub fn getMutable(self: *KdTree(K, V), key: K) ?*V {
+            return if (self.root != null) self.root.?.getMutable(key) else null;
+        }
 
         /// Returns the closest match to the input key in the tree.
         pub fn getNearest(self: *KdTree(K, V), key: K) ?struct { K, V } {

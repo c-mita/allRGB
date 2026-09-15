@@ -43,6 +43,16 @@ fn VpTreeNode(
             return node;
         }
 
+        fn get(self: *@This(), key: K) ?V {
+            const node = self.getNodeForKey(key);
+            return node.leaf.?.getValue(key);
+        }
+
+        fn getMutable(self: *@This(), key: K) ?*V {
+            const node = self.getNodeForKey(key);
+            return node.leaf.?.getValuePtr(key);
+        }
+
         fn add(self: *@This(), allocator: std.mem.Allocator, key: K, value: V) !void {
             var node = self.getNodeForKey(key);
             var leaf = node.leaf.?;
@@ -217,6 +227,16 @@ pub fn VpTree(
         root: ?*VpTreeNode(K, V, distanceFunc) = null,
         leaf_count: usize = 0,
         empty_leaf_count: usize = 0,
+
+        pub fn get(self: *@This(), key: K) ?V {
+            const root = self.root orelse return null;
+            return root.get(key);
+        }
+
+        pub fn getMutable(self: *@This(), key: K) ?*V {
+            const root = self.root orelse return null;
+            return root.getMutable(key);
+        }
 
         pub fn getNearest(self: *@This(), key: K) ?struct { K, V } {
             const root = self.root orelse return null;

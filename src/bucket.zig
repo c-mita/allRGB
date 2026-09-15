@@ -45,6 +45,16 @@ pub fn Bucket(comptime K: type, comptime V: type, comptime distance_func: fn (K,
             return null;
         }
 
+        /// Returns a pointer to the value in the store
+        pub fn getValuePtr(self: *@This(), key: K) ?*V {
+            for (0..self.count) |idx| {
+                if (std.meta.eql(key, self.keys[idx])) {
+                    return &self.values[idx];
+                }
+            }
+            return null;
+        }
+
         /// Returns the key closest to the given key in this leaf.
         pub fn getNearest(self: *@This(), key: K) ?struct { K, V } {
             var nearest: ?struct { K, V } = null;
