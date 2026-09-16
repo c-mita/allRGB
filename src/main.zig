@@ -135,121 +135,135 @@ const ReversingIterator = struct {
 const TreeType = enum {
     kd,
     vp,
+
+    fn treeType(comptime tree_type: TreeType) type {
+        return treeTypeValue(tree_type, ImageCoord);
+    }
+
+    fn treeTypeValue(comptime tree_type: TreeType, V: type) type {
+        return switch (tree_type) {
+            .kd => kd_tree.KdTree(Pixel, V),
+            .vp => vp_tree.VpTree(Pixel, V, Pixel.l1Distance),
+        };
+    }
 };
 
-fn TreeStore(comptime V: type) type {
-    return union(enum) {
-        kd: kd_tree.KdTree(Pixel, V),
-        vp: vp_tree.VpTree(Pixel, V, Pixel.l1Distance),
+fn TreeStore(comptime tree_type: TreeType) type {
+    return struct {
+        tree: TreeType.treeType(tree_type),
 
-        fn getNearest(self: *@This(), key: Pixel) ?struct { Pixel, V } {
-            return switch (self.*) {
-                inline else => |*impl| impl.getNearest(key),
-            };
+        pub fn init() @This() {
+            return .{ .tree = .{} };
         }
 
-        fn getNear(self: *@This(), key: Pixel) ?struct { Pixel, V } {
-            return switch (self.*) {
-                inline else => |*impl| impl.getNear(key),
-            };
+        pub fn getNearest(self: *@This(), key: Pixel) ?struct { Pixel, ImageCoord } {
+            return self.tree.getNearest(key);
         }
 
-        fn get(self: *@This(), key: Pixel) ?struct { Pixel, V } {
-            return switch (self.*) {
-                inline else => |*impl| impl.get(key),
-            };
+        pub fn getNear(self: *@This(), key: Pixel) ?struct { Pixel, ImageCoord } {
+            return self.tree.getNear(key);
         }
 
-        fn getMutable(self: *@This(), key: Pixel) ?*V {
-            return switch (self.*) {
-                inline else => |*impl| impl.getMutable(key),
-            };
+        pub fn get(self: *@This(), key: Pixel) ?ImageCoord {
+            return self.tree.get(key);
         }
 
-        fn add(self: *@This(), allocator: std.mem.Allocator, key: Pixel, value: V) !void {
-            return switch (self.*) {
-                inline else => |*impl| impl.add(allocator, key, value),
-            };
+        pub fn getMutable(self: *@This(), key: Pixel) ?*ImageCoord {
+            return self.tree.get(key);
         }
 
-        fn remove(self: *@This(), key: Pixel) !void {
-            return switch (self.*) {
-                inline else => |*impl| impl.remove(key),
-            };
+        pub fn add(
+            self: *@This(),
+            allocator: std.mem.Allocator,
+            key: Pixel,
+            value: ImageCoord,
+        ) !void {
+            return self.tree.add(allocator, key, value);
         }
 
-        fn leaves(self: *@This()) usize {
-            return switch (self.*) {
-                inline else => |*impl| impl.leaf_count,
-            };
+        pub fn remove(self: *@This(), key: Pixel, _: ImageCoord) !void {
+            return self.tree.remove(key);
         }
 
-        fn emptyLeaves(self: *@This()) usize {
-            return switch (self.*) {
-                inline else => |*impl| impl.empty_leaf_count,
-            };
+        pub fn leaves(self: *@This()) usize {
+            return self.tree.leaf_count;
+        }
+
+        pub fn emptyLeaves(self: *@This()) usize {
+            return self.tree.empty_leaf_count;
         }
     };
 }
 
-const TreeMultiStore = struct {
-    tree: TreeStore(std.ArrayList(ImageCoord)),
-    keys_count: usize = 0,
-    values_count: usize = 0,
+fn TreeMultiStore(comptime tree_type: TreeType) type {
+    return struct {
+        tree: TreeType.treeTypeValue(tree_type, std.ArrayList(ImageCoord)),
+        keys_count: usize = 0,
+        values_count: usize = 0,
 
-    fn getNearest(self: *@This(), key: Pixel) ?struct { Pixel, ImageCoord } {
-        const found, const data = self.tree.getNearest(key) orelse return null;
-        if (data.items.len == 0) {
-            std.debug.print("SHOULD NEVER HAPPEN\n", .{});
-            return null;
+        fn init() @This() {
+            return .{ .tree = .{}, .keys_count = 0, .values_count = 0 };
         }
-        return .{ found, data.items[0] };
-    }
 
-    fn getNear(self: *@This(), key: Pixel) ?struct { Pixel, ImageCoord } {
-        const found, const data = self.tree.getNear(key) orelse return null;
-        if (data.items.len == 0) {
-            return null;
+        fn getNearest(self: *@This(), key: Pixel) ?struct { Pixel, ImageCoord } {
+            const found, const data = self.tree.getNearest(key) orelse return null;
+            if (data.items.len == 0) {
+                std.debug.print("SHOULD NEVER HAPPEN\n", .{});
+                return null;
+            }
+            return .{ found, data.items[0] };
         }
-        return .{ found, data.items[0] };
-    }
 
-    fn add(self: *@This(), allocator: std.mem.Allocator, key: Pixel, value: ImageCoord) !void {
-        const maybe_data = self.tree.getMutable(key);
-        if (maybe_data == null) {
-            var data: std.ArrayList(ImageCoord) = .empty;
-            try data.append(allocator, value);
-            try self.tree.add(allocator, key, data);
-            self.keys_count += 1;
-        } else {
-            try maybe_data.?.append(allocator, value);
+        fn getNear(self: *@This(), key: Pixel) ?struct { Pixel, ImageCoord } {
+            const found, const data = self.tree.getNear(key) orelse return null;
+            if (data.items.len == 0) {
+                return null;
+            }
+            return .{ found, data.items[0] };
         }
-        self.values_count += 1;
-    }
 
-    fn remove(self: *@This(), key: Pixel, value: ImageCoord) !void {
-        const data = self.tree.getMutable(key) orelse return error.MissingKey;
-        for (0..data.items.len) |idx| {
-            if (std.meta.eql(value, data.items[idx])) {
-                _ = data.swapRemove(idx);
-                break;
+        fn add(
+            self: *@This(),
+            allocator: std.mem.Allocator,
+            key: Pixel,
+            value: ImageCoord,
+        ) !void {
+            const maybe_data = self.tree.getMutable(key);
+            if (maybe_data == null) {
+                var data: std.ArrayList(ImageCoord) = .empty;
+                try data.append(allocator, value);
+                try self.tree.add(allocator, key, data);
+                self.keys_count += 1;
+            } else {
+                try maybe_data.?.append(allocator, value);
+            }
+            self.values_count += 1;
+        }
+
+        fn remove(self: *@This(), key: Pixel, value: ImageCoord) !void {
+            const data = self.tree.getMutable(key) orelse return error.MissingKey;
+            for (0..data.items.len) |idx| {
+                if (std.meta.eql(value, data.items[idx])) {
+                    _ = data.swapRemove(idx);
+                    break;
+                }
+            }
+            self.values_count -= 1;
+            if (data.items.len == 0) {
+                self.tree.remove(key) catch unreachable;
+                self.keys_count -= 1;
             }
         }
-        self.values_count -= 1;
-        if (data.items.len == 0) {
-            self.tree.remove(key) catch unreachable;
-            self.keys_count -= 1;
+
+        fn leaves(self: *@This()) usize {
+            return self.tree.leaf_count;
         }
-    }
 
-    fn leaves(self: *@This()) usize {
-        return self.tree.leaves();
-    }
-
-    fn emptyLeaves(self: *@This()) usize {
-        return self.tree.emptyLeaves();
-    }
-};
+        fn emptyLeaves(self: *@This()) usize {
+            return self.tree.empty_leaf_count;
+        }
+    };
+}
 
 fn createColours(allocator: std.mem.Allocator, channel_depth: u8, zigzag: bool) ![]Pixel {
     const channel_size: usize = @as(usize, 1) << @as(u4, @intCast(channel_depth));
@@ -357,14 +371,11 @@ fn getFirstNeighbour(image: ImageData, point: ImageCoord) ?ImageCoord {
 
 /// Creates a new tree using the partial image.
 fn populateNewTree(
+    comptime tree_type: type,
     allocator: std.mem.Allocator,
     image: ImageData,
-    tree_type: TreeType,
-) !TreeMultiStore {
-    var tree: TreeMultiStore = switch (tree_type) {
-        .kd => .{ .tree = .{ .kd = .{} } },
-        .vp => .{ .tree = .{ .vp = .{} } },
-    };
+) !tree_type {
+    var tree: tree_type = tree_type.init();
     for (0..image.size_y) |y| {
         for (0..image.size_x) |x| {
             const slot: ImageCoord = .{ .x = x, .y = y };
@@ -382,12 +393,12 @@ fn populateNewTree(
 }
 
 fn fillImage(
+    comptime tree_type: type,
     allocator: std.mem.Allocator,
     colours: []const Pixel,
     image: *ImageData,
     starts: u16,
     stride: u8,
-    tree_type: TreeType,
     approximate: bool,
     seed: u32,
 ) !void {
@@ -399,7 +410,7 @@ fn fillImage(
     var tree_alloc = std.heap.ArenaAllocator.init(allocator);
     defer tree_alloc.deinit();
     const tree_allocator = tree_alloc.allocator();
-    var tree: TreeMultiStore = try populateNewTree(tree_allocator, image.*, tree_type);
+    var tree: tree_type = try populateNewTree(tree_type, tree_allocator, image.*);
 
     const start_idx = rng.intRangeLessThan(usize, 0, colours.len);
     var colours_it = StridedIterator(Pixel).iterate(
@@ -424,11 +435,10 @@ fn fillImage(
     while (colours_it.next()) |colour| {
         since_rebuild += 1;
         if (c_count % percent_mod == 0) {
-            std.debug.print("Progress: {d} - Tree leaves: {d} - Empty: {d} - Elements: {d} - Placed: {d}\n", .{
+            std.debug.print("Progress: {d} - Tree leaves: {d} - Empty: {d} - Placed: {d}\n", .{
                 percentage,
                 tree.leaves(),
                 tree.emptyLeaves(),
-                tree.values_count,
                 c_count,
             });
             percentage += 1;
@@ -440,16 +450,16 @@ fn fillImage(
         if (rebuild) {
             std.debug.print("Rebuilding tree - leaves: {any} - empty {any}\n", .{ tree.leaves(), tree.emptyLeaves() });
             _ = tree_alloc.reset(.retain_capacity);
-            tree = try populateNewTree(tree_allocator, image.*, tree_type);
+            tree = try populateNewTree(tree_type, tree_allocator, image.*);
             since_rebuild = 0;
         }
 
         var slot: ImageCoord = .{ .x = 0, .y = 0 };
         var pixel: Pixel = .{};
         const search_function = if (approximate)
-            &TreeMultiStore.getNear
+            &tree_type.getNear
         else
-            &TreeMultiStore.getNearest;
+            &tree_type.getNearest;
         while (true) {
             const closest_pixel, const closest_idx = search_function(
                 &tree,
@@ -683,19 +693,39 @@ pub fn main(init: std.process.Init) !void {
         .size_y = size_y,
     };
     std.debug.print("Producing a {d}x{d} image\n", .{ size_x, size_y });
-    fillImage(
-        gen_alloc,
-        colours,
-        &image,
-        parameters.starts,
-        parameters.stride,
-        parameters.tree_type,
-        parameters.approximate,
-        parameters.seed,
-    ) catch |err| {
-        std.debug.print("Error filling image: {any}\n", .{err});
-    };
-
+    switch (parameters.tree_type) {
+        inline else => |t| {
+            if (parameters.source == null) {
+                const tree = TreeStore(t);
+                fillImage(
+                    tree,
+                    gen_alloc,
+                    colours,
+                    &image,
+                    parameters.starts,
+                    parameters.stride,
+                    parameters.approximate,
+                    parameters.seed,
+                ) catch |err| {
+                    std.debug.print("Error filling image: {any}\n", .{err});
+                };
+            } else {
+                const tree = TreeMultiStore(t);
+                fillImage(
+                    tree,
+                    gen_alloc,
+                    colours,
+                    &image,
+                    parameters.starts,
+                    parameters.stride,
+                    parameters.approximate,
+                    parameters.seed,
+                ) catch |err| {
+                    std.debug.print("Error filling image: {any}\n", .{err});
+                };
+            }
+        },
+    }
     if (parameters.verify) {
         if (!verifyFullImagePopulated(image)) {
             std.debug.print("Image verified\n", .{});
