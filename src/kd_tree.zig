@@ -4,7 +4,7 @@ const colours = @import("colours.zig");
 const Bucket = @import("bucket.zig").Bucket;
 
 fn KdTreeLeaf(comptime K: type, comptime V: type) type {
-    return Bucket(K, V, K.distance);
+    return Bucket(K, V, usize, K.distance);
 }
 
 fn KdTreeNode(comptime K: type, comptime V: type) type {

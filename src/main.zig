@@ -137,6 +137,8 @@ const ReversingIterator = struct {
 const TreeType = enum {
     kd,
     vp,
+    vp2,
+    vpinf,
 
     fn treeType(comptime tree_type: TreeType) type {
         return treeTypeValue(tree_type, ImageCoord);
@@ -146,6 +148,8 @@ const TreeType = enum {
         return switch (tree_type) {
             .kd => kd_tree.KdTree(Pixel, V),
             .vp => vp_tree.VpTree(Pixel, V, Pixel.l1Distance),
+            .vp2 => vp_tree.VpTree(Pixel, V, Pixel.l2Distance),
+            .vpinf => vp_tree.VpTree(Pixel, V, Pixel.lInfDistance),
         };
     }
 };
@@ -671,6 +675,10 @@ fn parseArguments(args: std.process.Args) !Parameters {
             tree_type = .kd;
         } else if (std.mem.eql(u8, "--vp", arg)) {
             tree_type = .vp;
+        } else if (std.mem.eql(u8, "--vp2", arg)) {
+            tree_type = .vp2;
+        } else if (std.mem.eql(u8, "--vpinf", arg)) {
+            tree_type = .vpinf;
         } else if (std.mem.eql(u8, "--approx", arg)) {
             approximate = true;
         } else if (std.mem.eql(u8, "--wrap", arg)) {

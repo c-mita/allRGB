@@ -3,7 +3,12 @@ const std = @import("std");
 const LEAF_SIZE = 128;
 
 /// A simple collection of keys and values backed by static arrays.
-pub fn Bucket(comptime K: type, comptime V: type, comptime distance_func: fn (K, K) usize) type {
+pub fn Bucket(
+    comptime K: type,
+    comptime V: type,
+    comptime D: type,
+    distance_func: fn (K, K) D,
+) type {
     return struct {
         keys: [LEAF_SIZE]K = std.mem.zeroes([LEAF_SIZE]K),
         values: [LEAF_SIZE]V = std.mem.zeroes([LEAF_SIZE]V),
@@ -58,7 +63,11 @@ pub fn Bucket(comptime K: type, comptime V: type, comptime distance_func: fn (K,
         /// Returns the key closest to the given key in this leaf.
         pub fn getNearest(self: *@This(), key: K) ?struct { K, V } {
             var nearest: ?struct { K, V } = null;
-            var d_min: usize = 0xFFFFFFFF;
+            var d_min: D = switch (@typeInfo(D)) {
+                .int => std.math.maxInt(D),
+                .float => std.math.floatMax(D),
+                else => @compileError("Passed type must be a float or int"),
+            };
             for (0..self.count) |idx| {
                 const candidate = self.keys[idx];
                 const distance = distance_func(key, candidate);

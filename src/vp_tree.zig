@@ -2,25 +2,38 @@ const std = @import("std");
 
 const Bucket = @import("bucket.zig").Bucket;
 
+fn distanceFuncReturn(comptime func: anytype, comptime arg_type: type) type {
+    const function_info = @typeInfo(@TypeOf(func));
+    const params = function_info.@"fn".params;
+    if (params.len != 2 or params[0].type != arg_type or params[1].type != arg_type) {
+        const type_name = @typeName(arg_type);
+        @compileError("Distance function should be fn(" + type_name + ", " + type_name + ") number");
+    }
+    return function_info.@"fn".return_type.?;
+}
+
 fn VpTreeLeaf(
     comptime K: type,
     comptime V: type,
-    comptime distanceFunc: fn (K, K) usize,
+    comptime distanceFunc: anytype,
 ) type {
-    return Bucket(K, V, distanceFunc);
+    const D = distanceFuncReturn(distanceFunc, K);
+    return Bucket(K, V, D, distanceFunc);
 }
 
 fn VpTreeNode(
     comptime K: type,
     comptime V: type,
-    comptime distanceFunc: fn (K, K) usize,
+    comptime distanceFunc: anytype,
 ) type {
     return struct {
         leaf: ?*VpTreeLeaf(K, V, distanceFunc) = null,
         left: ?*@This() = null,
         right: ?*@This() = null,
         centre: K = undefined,
-        radius: usize = 0,
+        radius: distanceFuncReturn(distanceFunc, K) = 0,
+
+        const D = distanceFuncReturn(distanceFunc, K);
 
         fn initLeaf(allocator: std.mem.Allocator) !*@This() {
             const leaf = try allocator.create(VpTreeLeaf(K, V, distanceFunc));
@@ -33,7 +46,7 @@ fn VpTreeNode(
         fn getNodeForKey(self: *@This(), key: K) *@This() {
             var node = self;
             while (node.leaf == null) {
-                const distance = distanceFunc(key, node.centre);
+                const distance: D = distanceFunc(key, node.centre);
                 if (distance <= node.radius) {
                     node = node.left orelse unreachable;
                 } else {
@@ -158,7 +171,7 @@ fn VpTreeNode(
 
             var mid_point_offset: usize = 0;
             var valid_split = false;
-            var radius: usize = 0;
+            var radius: D = 0;
             // There is a chance that the "median" distance doesn't split anything
             // For instance, over half the other keys are exactly the same distance
             // away from our selected origin. So we need to trim back the radius
@@ -221,7 +234,7 @@ fn VpTreeNode(
 pub fn VpTree(
     comptime K: type,
     comptime V: type,
-    comptime distanceFunc: fn (K, K) usize,
+    comptime distanceFunc: anytype,
 ) type {
     return struct {
         root: ?*VpTreeNode(K, V, distanceFunc) = null,
