@@ -25,6 +25,8 @@ const ImageData = struct {
         return self.size_x * bounded.y + bounded.x;
     }
 
+    // Ensures the coordinate is within the bounds of the image data.
+    // Wraps with the image bounds.
     fn boundCoord(self: *const ImageData, coord: ImageCoord) ImageCoord {
         return .{
             .x = coord.x % self.size_x,
@@ -305,9 +307,57 @@ fn createColours(allocator: std.mem.Allocator, channel_depth: u8, zigzag: bool) 
     return colours;
 }
 
+// Returns a subslice of the provided buffer populate with open neighbours the
+// given point. This accounts for wrapping at the image boundaries.
+fn getAvailableNeighboursWrapped(
+    image: ImageData,
+    point: ImageCoord,
+    buffer: []ImageCoord,
+) []ImageCoord {
+    var candidates = std.mem.zeroes([8]ImageCoord);
+    var c_idx: usize = 0;
+    for (0..3) |y_idx| {
+        const dy = @as(i32, @intCast(y_idx)) - 1;
+        const y: i32 = @mod(
+            @as(i32, @intCast(point.y)) - dy,
+            @as(i32, @intCast(image.size_y)),
+        );
+        for (0..3) |x_idx| {
+            const dx = @as(i32, @intCast(x_idx)) - 1;
+            const x: i32 = @mod(
+                @as(i32, @intCast(point.x)) - dx,
+                @as(i32, @intCast(image.size_x)),
+            );
+
+            if (x == point.x and y == point.y) {
+                continue;
+            }
+            candidates[c_idx] = .{
+                .x = @as(usize, @intCast(x)),
+                .y = @as(usize, @intCast(y)),
+            };
+            c_idx += 1;
+        }
+    }
+
+    var out_idx: usize = 0;
+    for (0..c_idx) |idx| {
+        const test_point = candidates[idx];
+        if (image.at(test_point).alpha == 0) {
+            buffer[out_idx] = test_point;
+            out_idx += 1;
+        }
+    }
+    return buffer[0..out_idx];
+}
+
 /// Returns a subslice of the provided buffer populated with the open neighbours
 /// of the given point.
-fn getAvailableNeighbours(image: ImageData, point: ImageCoord, buffer: []ImageCoord) []ImageCoord {
+fn getAvailableNeighboursClamped(
+    image: ImageData,
+    point: ImageCoord,
+    buffer: []ImageCoord,
+) []ImageCoord {
     const bounded = image.boundCoord(point);
     var idx: usize = 0;
 
@@ -360,20 +410,37 @@ fn getAvailableNeighbours(image: ImageData, point: ImageCoord, buffer: []ImageCo
     return buffer[0..out_idx];
 }
 
-fn getFirstNeighbour(image: ImageData, point: ImageCoord) ?ImageCoord {
+fn getAvailableNeighbours(image: ImageData, point: ImageCoord, buffer: []ImageCoord, wrap: bool) []ImageCoord {
+    if (wrap) {
+        return getAvailableNeighboursWrapped(image, point, buffer);
+    } else {
+        return getAvailableNeighboursClamped(image, point, buffer);
+    }
+}
+
+fn getFirstNeighbour(image: ImageData, point: ImageCoord, wrap: bool) ?ImageCoord {
     var buffer: [8]ImageCoord = std.mem.zeroes([8]ImageCoord);
-    const available = getAvailableNeighbours(image, point, &buffer);
+    const available = getAvailableNeighbours(image, point, &buffer, wrap);
     if (available.len > 0) {
         return available[0];
     }
     return null;
 }
 
+const FillParameters = struct {
+    seed: u32,
+    starts: u16,
+    stride: u8,
+    approximate: bool,
+    wrap: bool,
+};
+
 /// Creates a new tree using the partial image.
 fn populateNewTree(
     comptime tree_type: type,
     allocator: std.mem.Allocator,
     image: ImageData,
+    parameters: FillParameters,
 ) !tree_type {
     var tree: tree_type = tree_type.init();
     for (0..image.size_y) |y| {
@@ -383,7 +450,7 @@ fn populateNewTree(
             if (pixel.alpha == 0) {
                 continue;
             }
-            if (getFirstNeighbour(image, slot) == null) {
+            if (getFirstNeighbour(image, slot, parameters.wrap) == null) {
                 continue;
             }
             try tree.add(allocator, pixel, slot);
@@ -397,12 +464,9 @@ fn fillImage(
     allocator: std.mem.Allocator,
     colours: []const Pixel,
     image: *ImageData,
-    starts: u16,
-    stride: u8,
-    approximate: bool,
-    seed: u32,
+    parameters: FillParameters,
 ) !void {
-    var prng = std.Random.DefaultPrng.init(seed);
+    var prng = std.Random.DefaultPrng.init(parameters.seed);
     const rng = prng.random();
     for (0..image.buffer.len) |idx| {
         image.buffer[idx] = .{};
@@ -410,17 +474,17 @@ fn fillImage(
     var tree_alloc = std.heap.ArenaAllocator.init(allocator);
     defer tree_alloc.deinit();
     const tree_allocator = tree_alloc.allocator();
-    var tree: tree_type = try populateNewTree(tree_type, tree_allocator, image.*);
+    var tree: tree_type = try populateNewTree(tree_type, tree_allocator, image.*, parameters);
 
     const start_idx = rng.intRangeLessThan(usize, 0, colours.len);
     var colours_it = StridedIterator(Pixel).iterate(
         colours,
         start_idx,
-        stride,
+        parameters.stride,
     );
 
     // place the initial pixels and seed the tree
-    for (0..starts) |_| {
+    for (0..parameters.starts) |_| {
         const initial_x = rng.intRangeLessThan(usize, 0, image.size_x);
         const initial_y = rng.intRangeLessThan(usize, 0, image.size_y);
         const initial_pixel = colours_it.next() orelse return error.NoColours;
@@ -429,7 +493,7 @@ fn fillImage(
         image.put(initial_coord, initial_pixel);
     }
     var percentage: i32 = 1;
-    var c_count: usize = starts;
+    var c_count: usize = parameters.starts;
     var since_rebuild: usize = 0;
     const percent_mod = @max(1, colours.len / 100);
     while (colours_it.next()) |colour| {
@@ -450,13 +514,13 @@ fn fillImage(
         if (rebuild) {
             std.debug.print("Rebuilding tree - leaves: {any} - empty {any}\n", .{ tree.leaves(), tree.emptyLeaves() });
             _ = tree_alloc.reset(.retain_capacity);
-            tree = try populateNewTree(tree_type, tree_allocator, image.*);
+            tree = try populateNewTree(tree_type, tree_allocator, image.*, parameters);
             since_rebuild = 0;
         }
 
         var slot: ImageCoord = .{ .x = 0, .y = 0 };
         var pixel: Pixel = .{};
-        const search_function = if (approximate)
+        const search_function = if (parameters.approximate)
             &tree_type.getNear
         else
             &tree_type.getNearest;
@@ -466,7 +530,7 @@ fn fillImage(
                 colour,
             ) orelse return error.InvalidStateEmptyTree;
             var buffer = std.mem.zeroes([8]ImageCoord);
-            const available = getAvailableNeighbours(image.*, closest_idx, &buffer);
+            const available = getAvailableNeighbours(image.*, closest_idx, &buffer, parameters.wrap);
             if (available.len == 0) {
                 try tree.remove(closest_pixel, closest_idx);
                 continue;
@@ -481,7 +545,7 @@ fn fillImage(
             break;
         }
         image.put(slot, colour);
-        if (getFirstNeighbour(image.*, slot) != null) {
+        if (getFirstNeighbour(image.*, slot, parameters.wrap) != null) {
             try tree.add(tree_allocator, colour, slot);
         }
     }
@@ -551,6 +615,7 @@ const Parameters = struct {
     stride: u8 = 1,
     tree_type: TreeType = .kd,
     approximate: bool = false,
+    wrap: bool = false,
     source: ?[]const u8 = null,
 };
 
@@ -564,6 +629,7 @@ fn parseArguments(args: std.process.Args) !Parameters {
     var stride: u8 = 1;
     var approximate: bool = false;
     var tree_type: TreeType = .kd;
+    var wrap: bool = false;
     var source: ?[]const u8 = null;
     var it = args.iterate();
 
@@ -607,6 +673,8 @@ fn parseArguments(args: std.process.Args) !Parameters {
             tree_type = .vp;
         } else if (std.mem.eql(u8, "--approx", arg)) {
             approximate = true;
+        } else if (std.mem.eql(u8, "--wrap", arg)) {
+            wrap = true;
         } else if (std.mem.eql(u8, "--source", arg)) {
             source = it.next() orelse return error.InvalidArguments;
         }
@@ -621,6 +689,7 @@ fn parseArguments(args: std.process.Args) !Parameters {
         .channel_depth = channel_depth,
         .stride = stride,
         .approximate = approximate,
+        .wrap = wrap,
         .tree_type = tree_type,
         .source = source,
     };
@@ -693,6 +762,14 @@ pub fn main(init: std.process.Init) !void {
         .size_y = size_y,
     };
     std.debug.print("Producing a {d}x{d} image\n", .{ size_x, size_y });
+
+    const fill_params = FillParameters{
+        .seed = parameters.seed,
+        .approximate = parameters.approximate,
+        .stride = parameters.stride,
+        .starts = parameters.starts,
+        .wrap = parameters.wrap,
+    };
     switch (parameters.tree_type) {
         inline else => |t| {
             if (parameters.source == null) {
@@ -702,10 +779,7 @@ pub fn main(init: std.process.Init) !void {
                     gen_alloc,
                     colours,
                     &image,
-                    parameters.starts,
-                    parameters.stride,
-                    parameters.approximate,
-                    parameters.seed,
+                    fill_params,
                 ) catch |err| {
                     std.debug.print("Error filling image: {any}\n", .{err});
                 };
@@ -716,10 +790,7 @@ pub fn main(init: std.process.Init) !void {
                     gen_alloc,
                     colours,
                     &image,
-                    parameters.starts,
-                    parameters.stride,
-                    parameters.approximate,
-                    parameters.seed,
+                    fill_params,
                 ) catch |err| {
                     std.debug.print("Error filling image: {any}\n", .{err});
                 };
