@@ -52,6 +52,19 @@ pub fn ArgParser(
             }
             return params;
         }
+
+        pub fn helpText() []const u8 {
+            comptime var text: []const u8 = "Usage:\n\n";
+            inline for (flags, 0..) |flag, idx| {
+                text = text ++ flag.helpText();
+                if (idx < flags.len) {
+                    text = text ++ "\n\n";
+                } else {
+                    text = text ++ "\n";
+                }
+            }
+            return text;
+        }
     };
 }
 
@@ -60,6 +73,7 @@ pub fn ValueFlag(
     comptime name: []const u8,
     comptime short_name: ?[]const u8,
     comptime default: T,
+    comptime help: []const u8,
 ) type {
     const full_flag = "--" ++ name;
     const short_flag = if (short_name != null) "-" ++ short_name.? else null;
@@ -109,12 +123,27 @@ pub fn ValueFlag(
                 else => @compileError("Unsupported type " ++ @typeName(T)),
             };
         }
+
+        pub inline fn helpText() []const u8 {
+            if (flag_short_name != null) {
+                return std.fmt.comptimePrint(
+                    " -{s}, --{s} [value]\n\t{s}",
+                    .{ flag_short_name.?, flag_name, help },
+                );
+            } else {
+                return std.fmt.comptimePrint(
+                    " --{s} [value]\n\t{s}",
+                    .{ flag_name, help },
+                );
+            }
+        }
     };
 }
 
 pub fn BooleanFlag(
     comptime name: []const u8,
     comptime default: bool,
+    comptime help: []const u8,
 ) type {
     const positive_flag = "--" ++ name;
     const negative_flag = "--no" ++ name;
@@ -145,6 +174,13 @@ pub fn BooleanFlag(
             }
             return false;
         }
+
+        pub inline fn helpText() []const u8 {
+            return std.fmt.comptimePrint(
+                " --[no]{s}\n\t{s}",
+                .{ flag_name, help },
+            );
+        }
     };
 }
 
@@ -152,6 +188,7 @@ pub fn EnumFlag(
     comptime values: type,
     comptime name: []const u8,
     comptime default: values,
+    comptime help: []const u8,
 ) type {
     const enum_fields = std.enums.values(values);
 
@@ -183,5 +220,32 @@ pub fn EnumFlag(
                 return error.FlagParseError;
             }
         }
+
+        pub inline fn helpText() []const u8 {
+            comptime var text: []const u8 = "\t" ++ help;
+            inline for (enum_fields) |val| {
+                const tag = " --" ++ @tagName(val);
+                text = text ++ "\n" ++ tag;
+            }
+            return text;
+        }
     };
 }
+
+pub const helpFlag = struct {
+    pub const flag_name = "help";
+    pub const flag_default = false;
+    pub const flag_type = bool;
+
+    pub fn matches(arg: [:0]const u8) bool {
+        return std.mem.eql(u8, "--help", arg) or (std.mem.eql(u8, "-h", arg));
+    }
+
+    pub fn parse(_: [:0]const u8, _: *std.process.Args.Iterator) !bool {
+        return true;
+    }
+
+    pub inline fn helpText() []const u8 {
+        return std.fmt.comptimePrint(" {s}", .{"-h / --help\n\tShow help"});
+    }
+};

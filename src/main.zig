@@ -6,6 +6,92 @@ const colours_lib = @import("colours.zig");
 const flags = @import("flags.zig");
 const Pixel = @import("colours.zig").Pixel;
 
+const seed_flag = flags.ValueFlag(
+    u32,
+    "seed",
+    "e",
+    0,
+    "The seed for the RNG",
+);
+
+const starts_flag = flags.ValueFlag(
+    u16,
+    "starts",
+    "n",
+    1,
+    "The number of pixels to place before attempting nearest-neighbour",
+);
+const wrap_flag = flags.BooleanFlag(
+    "wrap",
+    false,
+    "If nearest-neighbour checks should wrap around the image boundary",
+);
+const output_file_flag = flags.ValueFlag(
+    []const u8,
+    "output",
+    "o",
+    "out.png",
+    "The output PNG to write to",
+);
+const sort_flag = flags.EnumFlag(
+    ColourSort,
+    "sort_type",
+    .hue,
+    "How to sort the initial set of colours before attempting nearest-neighbour",
+);
+const verify_flag = flags.BooleanFlag(
+    "verify",
+    true,
+    "Run verification after generating the output",
+);
+const depth_flag = flags.ValueFlag(
+    u8,
+    "depth",
+    "d",
+    8,
+    "The bit depth of each RGB channel - valid range is [1, 8] (inclusive)",
+);
+const approximate_flag = flags.BooleanFlag(
+    "approx",
+    false,
+    "Approximate nearest-neighbour",
+);
+const tree_type_flag = flags.EnumFlag(
+    TreeType,
+    "tree_type",
+    .kd,
+    "The type of tree to use",
+);
+const stride_flag = flags.ValueFlag(
+    u8,
+    "stride",
+    "r",
+    1,
+    "The step size between successive pixels when iterating through for nearest-neighbbour",
+);
+const source_flag = flags.ValueFlag(
+    ?[]const u8,
+    "source",
+    "s",
+    null,
+    "The source image to use for colours",
+);
+
+const args_parser = flags.ArgParser(.{
+    output_file_flag,
+    source_flag,
+    depth_flag,
+    seed_flag,
+    sort_flag,
+    tree_type_flag,
+    starts_flag,
+    wrap_flag,
+    approximate_flag,
+    stride_flag,
+    verify_flag,
+    flags.helpFlag,
+});
+
 const ImageData = struct {
     buffer: []Pixel,
     size_x: usize,
@@ -622,36 +708,11 @@ const Parameters = struct {
     approximate: bool = false,
     wrap: bool = false,
     source: ?[]const u8 = null,
+    help: bool = false,
 };
 
 fn parseArguments(args: std.process.Args) !Parameters {
-    const seed_flag = flags.ValueFlag(u32, "seed", "e", 0);
-    const starts_flag = flags.ValueFlag(u16, "starts", "n", 1);
-    const wrap_flag = flags.BooleanFlag("wrap", false);
-    const output_file_flag = flags.ValueFlag([]const u8, "output", "o", "out.png");
-    const sort_flag = flags.EnumFlag(ColourSort, "sort_type", .hue);
-    const verify_flag = flags.BooleanFlag("verify", true);
-    const depth_flag = flags.ValueFlag(u8, "depth", "d", 8);
-    const approximate_flag = flags.BooleanFlag("approx", false);
-    const tree_type_flag = flags.EnumFlag(TreeType, "tree_type", .kd);
-    const stride_flag = flags.ValueFlag(u8, "stride", "r", 1);
-    const source_flag = flags.ValueFlag(?[]const u8, "source", "s", null);
-
-    const parser = flags.ArgParser(.{
-        output_file_flag,
-        source_flag,
-        depth_flag,
-        seed_flag,
-        sort_flag,
-        tree_type_flag,
-        starts_flag,
-        wrap_flag,
-        approximate_flag,
-        stride_flag,
-        verify_flag,
-    });
-
-    const params = parser.parse(args) catch return error.InvaldArguments;
+    const params = args_parser.parse(args) catch return error.InvaldArguments;
 
     if (params.depth == 0 or params.depth > 8) {
         return error.InvalidArguments;
@@ -669,6 +730,7 @@ fn parseArguments(args: std.process.Args) !Parameters {
         .wrap = params.wrap,
         .tree_type = params.tree_type,
         .source = params.source,
+        .help = params.help,
     };
 }
 
@@ -702,7 +764,14 @@ pub fn main(init: std.process.Init) !void {
 
     var size_x: u32 = 0;
     var size_y: u32 = 0;
-    const parameters = try parseArguments(init.minimal.args);
+    const parameters = parseArguments(init.minimal.args) catch |err| {
+        std.debug.print("{s}\n", .{args_parser.helpText()});
+        return err;
+    };
+    if (parameters.help) {
+        std.debug.print("{s}\n", .{args_parser.helpText()});
+        return;
+    }
 
     var colours: []colours_lib.Pixel = undefined;
     if (parameters.source != null) {
