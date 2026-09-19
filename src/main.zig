@@ -3,6 +3,7 @@ const png = @import("png.zig");
 const kd_tree = @import("kd_tree.zig");
 const vp_tree = @import("vp_tree.zig");
 const colours_lib = @import("colours.zig");
+const flags = @import("flags.zig");
 const Pixel = @import("colours.zig").Pixel;
 
 const ImageData = struct {
@@ -624,82 +625,50 @@ const Parameters = struct {
 };
 
 fn parseArguments(args: std.process.Args) !Parameters {
-    var seed: u32 = 0;
-    var starts: u16 = 1;
-    var output_file: []const u8 = "out.png";
-    var sort_type = ColourSort.hue;
-    var verify = false;
-    var channel_depth: u8 = 8;
-    var stride: u8 = 1;
-    var approximate: bool = false;
-    var tree_type: TreeType = .kd;
-    var wrap: bool = false;
-    var source: ?[]const u8 = null;
-    var it = args.iterate();
+    const seed_flag = flags.ValueFlag(u32, "seed", "e", 0);
+    const starts_flag = flags.ValueFlag(u16, "starts", "n", 1);
+    const wrap_flag = flags.BooleanFlag("wrap", false);
+    const output_file_flag = flags.ValueFlag([]const u8, "output", "o", "out.png");
+    const sort_flag = flags.EnumFlag(ColourSort, "sort_type", .hue);
+    const verify_flag = flags.BooleanFlag("verify", true);
+    const depth_flag = flags.ValueFlag(u8, "depth", "d", 8);
+    const approximate_flag = flags.BooleanFlag("approx", false);
+    const tree_type_flag = flags.EnumFlag(TreeType, "tree_type", .kd);
+    const stride_flag = flags.ValueFlag(u8, "stride", "r", 1);
+    const source_flag = flags.ValueFlag(?[]const u8, "source", "s", null);
 
-    while (it.next()) |arg| {
-        if (std.mem.eql(u8, "--seed", arg)) {
-            const seed_str = it.next() orelse return error.InvalidArguments;
-            seed = try std.fmt.parseInt(u32, seed_str, 10);
-        } else if (std.mem.eql(u8, "--starts", arg)) {
-            const starts_str = it.next() orelse return error.InvalidArguments;
-            starts = try std.fmt.parseInt(u16, starts_str, 10);
-        } else if (std.mem.eql(u8, "--out", arg)) {
-            output_file = it.next() orelse return error.InvalidArguments;
-        } else if (std.mem.eql(u8, "--hue", arg)) {
-            sort_type = ColourSort.hue;
-        } else if (std.mem.eql(u8, "--hsp", arg)) {
-            sort_type = ColourSort.hsp;
-        } else if (std.mem.eql(u8, "--zigzag", arg)) {
-            sort_type = ColourSort.zigzag;
-        } else if (std.mem.eql(u8, "--zorder", arg)) {
-            sort_type = ColourSort.zorder;
-        } else if (std.mem.eql(u8, "--none", arg)) {
-            sort_type = ColourSort.none;
-        } else if (std.mem.eql(u8, "--verify", arg)) {
-            verify = true;
-        } else if (std.mem.eql(u8, "--depth", arg)) {
-            const depth_str = it.next() orelse return error.InvalidArguments;
-            channel_depth = std.fmt.parseInt(u8, depth_str, 10) catch return error.InvalidArguments;
-            if (channel_depth > 8) {
-                std.debug.print("Maximum channel depth is 8\n", .{});
-                return error.InvalidArguments;
-            } else if (channel_depth == 0) {
-                std.debug.print("Minimum channel depth is 1\n", .{});
-                return error.InvalidArguments;
-            }
-        } else if (std.mem.eql(u8, "--stride", arg)) {
-            const stride_str = it.next() orelse return error.InvalidArguments;
-            stride = std.fmt.parseInt(u8, stride_str, 10) catch return error.InvalidArguments;
-        } else if (std.mem.eql(u8, "--kd", arg)) {
-            tree_type = .kd;
-        } else if (std.mem.eql(u8, "--vp", arg)) {
-            tree_type = .vp;
-        } else if (std.mem.eql(u8, "--vp2", arg)) {
-            tree_type = .vp2;
-        } else if (std.mem.eql(u8, "--vpinf", arg)) {
-            tree_type = .vpinf;
-        } else if (std.mem.eql(u8, "--approx", arg)) {
-            approximate = true;
-        } else if (std.mem.eql(u8, "--wrap", arg)) {
-            wrap = true;
-        } else if (std.mem.eql(u8, "--source", arg)) {
-            source = it.next() orelse return error.InvalidArguments;
-        }
+    const parser = flags.ArgParser(.{
+        output_file_flag,
+        source_flag,
+        depth_flag,
+        seed_flag,
+        sort_flag,
+        tree_type_flag,
+        starts_flag,
+        wrap_flag,
+        approximate_flag,
+        stride_flag,
+        verify_flag,
+    });
+
+    const params = parser.parse(args) catch return error.InvaldArguments;
+
+    if (params.depth == 0 or params.depth > 8) {
+        return error.InvalidArguments;
     }
 
     return .{
-        .seed = seed,
-        .starts = starts,
-        .output_file = output_file,
-        .sort_type = sort_type,
-        .verify = verify,
-        .channel_depth = channel_depth,
-        .stride = stride,
-        .approximate = approximate,
-        .wrap = wrap,
-        .tree_type = tree_type,
-        .source = source,
+        .seed = params.seed,
+        .starts = params.starts,
+        .output_file = params.output,
+        .sort_type = params.sort_type,
+        .verify = params.verify,
+        .channel_depth = params.depth,
+        .stride = params.stride,
+        .approximate = params.approx,
+        .wrap = params.wrap,
+        .tree_type = params.tree_type,
+        .source = params.source,
     };
 }
 
