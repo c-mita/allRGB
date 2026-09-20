@@ -526,6 +526,22 @@ const FillParameters = struct {
     wrap: bool,
 };
 
+const ProgressMonitor = struct {
+    writer: *std.Io.Writer,
+    used: bool = false,
+
+    pub fn update(self: *@This(), comptime format: []const u8, args: anytype) !void {
+        const csi = "\x1B[";
+        const clear_line = csi ++ "1K";
+        const text = clear_line ++ "\r" ++ format;
+        try self.writer.print(text, args);
+        self.used = true;
+    }
+
+    pub fn finish(self: *@This()) void {
+        self.writer.print("\n", .{}) catch return;
+    }
+};
 /// Creates a new tree using the partial image.
 fn populateNewTree(
     comptime tree_type: type,
@@ -555,6 +571,7 @@ fn fillImage(
     allocator: std.mem.Allocator,
     colours: []const Pixel,
     image: *ImageData,
+    progress_monitor: *ProgressMonitor,
     parameters: FillParameters,
 ) !void {
     var prng = std.Random.DefaultPrng.init(parameters.seed);
@@ -562,6 +579,7 @@ fn fillImage(
     for (0..image.buffer.len) |idx| {
         image.buffer[idx] = .{};
     }
+    defer progress_monitor.finish();
     var tree_alloc = std.heap.ArenaAllocator.init(allocator);
     defer tree_alloc.deinit();
     const tree_allocator = tree_alloc.allocator();
@@ -583,30 +601,19 @@ fn fillImage(
         try tree.add(tree_allocator, initial_pixel, initial_coord);
         image.put(initial_coord, initial_pixel);
     }
-    var percentage: i32 = 1;
     var c_count: usize = parameters.starts;
     var since_rebuild: usize = 0;
-    const percent_mod = @max(1, colours.len / 100);
+    var rebuilds: usize = 0;
     while (colours_it.next()) |colour| {
         since_rebuild += 1;
-        if (c_count % percent_mod == 0) {
-            std.debug.print("Progress: {d} - Tree leaves: {d} - Empty: {d} - Placed: {d}\n", .{
-                percentage,
-                tree.leaves(),
-                tree.emptyLeaves(),
-                c_count,
-            });
-            percentage += 1;
-        }
-        c_count += 1;
         const empties = tree.emptyLeaves();
         const ratio: f32 = @as(f32, @floatFromInt(empties)) / @as(f32, @floatFromInt(tree.leaves()));
         const rebuild = (empties > 1 and ratio >= 0.1) or (since_rebuild > 1024 * 1024);
         if (rebuild) {
-            std.debug.print("Rebuilding tree - leaves: {any} - empty {any}\n", .{ tree.leaves(), tree.emptyLeaves() });
             _ = tree_alloc.reset(.retain_capacity);
             tree = try populateNewTree(tree_type, tree_allocator, image.*, parameters);
             since_rebuild = 0;
+            rebuilds += 1;
         }
 
         var slot: ImageCoord = .{ .x = 0, .y = 0 };
@@ -638,6 +645,21 @@ fn fillImage(
         image.put(slot, colour);
         if (getFirstNeighbour(image.*, slot, parameters.wrap) != null) {
             try tree.add(tree_allocator, colour, slot);
+        }
+        c_count += 1;
+        if (c_count % 1024 * 16 == 0) {
+            const percentage: f64 = 100 * @as(f64, @floatFromInt(c_count)) / @as(f64, @floatFromInt(colours.len));
+            try progress_monitor.update(
+                "{d:5.1}% - {d:6}/{d} \tTree leaves: {d:4} - Empty: {d:3} - Rebuilds {d:3}",
+                .{
+                    percentage,
+                    c_count,
+                    image.buffer.len,
+                    tree.leaves(),
+                    tree.emptyLeaves(),
+                    rebuilds,
+                },
+            );
         }
     }
 }
@@ -762,20 +784,29 @@ pub fn main(init: std.process.Init) !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
+    const stdout = std.Io.File.stdout();
+    const stderr = std.Io.File.stderr();
+    // unbuffered - don't plan many writes but the inputs may be large.
+    var stdout_writer = stdout.writer(init.io, &.{});
+    var stderr_writer = stderr.writer(init.io, &.{});
+
     var size_x: u32 = 0;
     var size_y: u32 = 0;
     const parameters = parseArguments(init.minimal.args) catch |err| {
-        std.debug.print("{s}\n", .{args_parser.helpText()});
+        try stdout_writer.interface.print("{s}\n", .{args_parser.helpText()});
         return err;
     };
     if (parameters.help) {
-        std.debug.print("{s}\n", .{args_parser.helpText()});
+        try stdout_writer.interface.print("{s}\n", .{args_parser.helpText()});
         return;
     }
 
     var colours: []colours_lib.Pixel = undefined;
     if (parameters.source != null) {
-        std.debug.print("Reading from {s}\n", .{parameters.source.?});
+        try stderr_writer.interface.print(
+            "Reading from {s}\n",
+            .{parameters.source.?},
+        );
         const source_data = try png.readPng(
             allocator,
             init.io,
@@ -807,7 +838,10 @@ pub fn main(init: std.process.Init) !void {
         .size_x = size_x,
         .size_y = size_y,
     };
-    std.debug.print("Producing a {d}x{d} image\n", .{ size_x, size_y });
+    try stderr_writer.interface.print(
+        "Producing a {d}x{d} image - {s}\n",
+        .{ size_x, size_y, parameters.output_file },
+    );
 
     const fill_params = FillParameters{
         .seed = parameters.seed,
@@ -816,6 +850,7 @@ pub fn main(init: std.process.Init) !void {
         .starts = parameters.starts,
         .wrap = parameters.wrap,
     };
+    var progress_monitor = ProgressMonitor{ .writer = &stdout_writer.interface };
     switch (parameters.tree_type) {
         inline else => |t| {
             if (parameters.source == null) {
@@ -825,9 +860,10 @@ pub fn main(init: std.process.Init) !void {
                     gen_alloc,
                     colours,
                     &image,
+                    &progress_monitor,
                     fill_params,
                 ) catch |err| {
-                    std.debug.print("Error filling image: {any}\n", .{err});
+                    stderr_writer.interface.print("Error filling image: {any}\n", .{err}) catch {};
                 };
             } else {
                 const tree = TreeMultiStore(t);
@@ -836,19 +872,26 @@ pub fn main(init: std.process.Init) !void {
                     gen_alloc,
                     colours,
                     &image,
+                    &progress_monitor,
                     fill_params,
                 ) catch |err| {
-                    std.debug.print("Error filling image: {any}\n", .{err});
+                    stderr_writer.interface.print("Error filling image: {any}\n", .{err}) catch {};
                 };
             }
         },
     }
     if (parameters.verify) {
+        var failed = false;
         if (!verifyFullImagePopulated(image)) {
-            std.debug.print("Image verified\n", .{});
-        }
+            try stderr_writer.interface.print("Not all pixels were written to.\n", .{});
+            failed = true;
+        } else {}
         if (!try verifyAllPixels(allocator, image, colours)) {
-            std.debug.print("Written pixels do not match source pixels\n", .{});
+            failed = true;
+            try stderr_writer.interface.print("Written pixels do not match source pixels\n", .{});
+        }
+        if (!failed) {
+            try stderr_writer.interface.print("Image verified\n", .{});
         }
     }
 
