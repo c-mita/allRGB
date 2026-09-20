@@ -125,17 +125,34 @@ pub fn ValueFlag(
         }
 
         pub inline fn helpText() []const u8 {
+            comptime var text: []const u8 = undefined;
             if (flag_short_name != null) {
-                return std.fmt.comptimePrint(
+                text = std.fmt.comptimePrint(
                     " -{s}, --{s} [value]\n\t{s}",
                     .{ flag_short_name.?, flag_name, help },
                 );
             } else {
-                return std.fmt.comptimePrint(
+                text = std.fmt.comptimePrint(
                     " --{s} [value]\n\t{s}",
                     .{ flag_name, help },
                 );
             }
+            if (type_info == .optional and flag_default == null) {
+                return text;
+            }
+            const t_info = if (type_info == .optional) @typeInfo(type_info.optional.child) else type_info;
+            const specifier = switch (t_info) {
+                .array => if (t_info.array.child == u8) "{s}" else "{any}",
+                .pointer => if (t_info.pointer.child == u8) "{s}" else "{any}",
+                .int, .float => "{d}",
+                else => "{any}",
+            };
+            const format_string = "\n\t[default: " ++ specifier ++ "]";
+            const full = text ++ std.fmt.comptimePrint(
+                format_string,
+                .{flag_default},
+            );
+            return full;
         }
     };
 }
@@ -176,9 +193,21 @@ pub fn BooleanFlag(
         }
 
         pub inline fn helpText() []const u8 {
-            return std.fmt.comptimePrint(
+            const help_text = std.fmt.comptimePrint(
                 " --[no]{s}\n\t{s}",
                 .{ flag_name, help },
+            );
+            const default_text = std.fmt.comptimePrint(
+                "[default: {s}]",
+                .{
+                    if (flag_default) positive_flag else negative_flag,
+                },
+            );
+            return std.fmt.comptimePrint(
+                "{s}\n\t{s}",
+                .{
+                    help_text, default_text,
+                },
             );
         }
     };
@@ -222,11 +251,16 @@ pub fn EnumFlag(
         }
 
         pub inline fn helpText() []const u8 {
-            comptime var text: []const u8 = "\t" ++ help;
+            comptime var text: []const u8 = "";
             inline for (enum_fields) |val| {
                 const tag = " --" ++ @tagName(val);
                 text = text ++ "\n" ++ tag;
             }
+            text = text ++ "\n\t" ++ help;
+            text = text ++ std.fmt.comptimePrint(
+                "\n\t[default: --{s}]",
+                .{@tagName(flag_default)},
+            );
             return text;
         }
     };
