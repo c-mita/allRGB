@@ -409,7 +409,7 @@ fn resizeColours(allocator: std.mem.Allocator, colours: []Pixel, size: usize) ![
     const remainder = size - colours.len * repeats;
     for (0..colours.len) |idx| {
         for (0..repeats) |r_idx| {
-            new_colours[idx + r_idx] = colours[idx];
+            new_colours[r_idx * colours.len + idx] = colours[idx];
         }
     }
 
