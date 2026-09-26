@@ -89,10 +89,18 @@ const target_flag = flags.ValueFlag(
     "A target image to match to",
 );
 
+const strategy_flag = flags.EnumFlag(
+    Strategy,
+    "strategy",
+    .min,
+    "The matching strategy to use",
+);
+
 const args_parser = flags.ArgParser(.{
     output_file_flag,
     source_flag,
     target_flag,
+    strategy_flag,
     depth_flag,
     seed_flag,
     sort_flag,
@@ -104,6 +112,11 @@ const args_parser = flags.ArgParser(.{
     verify_flag,
     flags.helpFlag,
 });
+
+const Strategy = enum {
+    min,
+    mean,
+};
 
 fn StridedIterator(comptime T: type) type {
     return struct {
@@ -277,20 +290,30 @@ fn TreeMultiStore(comptime tree_type: TreeType) type {
         }
 
         pub fn getNearest(self: *@This(), key: Pixel) ?struct { Pixel, ImageCoord } {
+            const found, const items = self.getAllNearest(key) orelse return null;
+            return .{ found, items[0] };
+        }
+
+        pub fn getNear(self: *@This(), key: Pixel) ?struct { Pixel, ImageCoord } {
+            const found, const items = self.getAllNear(key) orelse return null;
+            return .{ found, items[0] };
+        }
+
+        pub fn getAllNearest(self: *@This(), key: Pixel) ?struct { Pixel, []ImageCoord } {
             const found, const data = self.tree.getNearest(key) orelse return null;
             if (data.items.len == 0) {
                 std.debug.print("SHOULD NEVER HAPPEN\n", .{});
                 return null;
             }
-            return .{ found, data.items[0] };
+            return .{ found, data.items };
         }
 
-        pub fn getNear(self: *@This(), key: Pixel) ?struct { Pixel, ImageCoord } {
+        pub fn getAllNear(self: *@This(), key: Pixel) ?struct { Pixel, []ImageCoord } {
             const found, const data = self.tree.getNear(key) orelse return null;
             if (data.items.len == 0) {
                 return null;
             }
-            return .{ found, data.items[0] };
+            return .{ found, data.items };
         }
 
         pub fn add(
@@ -554,6 +577,7 @@ const Parameters = struct {
     wrap: bool = false,
     source: ?[]const u8 = null,
     target: ?[]const u8 = null,
+    strategy: fills.Fills = .min,
     help: bool = false,
 };
 
@@ -563,6 +587,13 @@ fn parseArguments(args: std.process.Args) !Parameters {
     if (params.depth == 0 or params.depth > 8) {
         return error.InvalidArguments;
     }
+
+    const strategy: fills.Fills = if (params.target != null)
+        .target
+    else switch (params.strategy) {
+        .mean => .mean,
+        .min => .min,
+    };
 
     return .{
         .seed = params.seed,
@@ -577,6 +608,7 @@ fn parseArguments(args: std.process.Args) !Parameters {
         .tree_type = params.tree_type,
         .source = params.source,
         .target = params.target,
+        .strategy = strategy,
         .help = params.help,
     };
 }
@@ -647,6 +679,28 @@ fn targetFillOf(
     return filler.filler();
 }
 
+fn meanFillOf(
+    allocator: std.mem.Allocator,
+    tree_allocator: std.mem.Allocator,
+    comptime tree_type: TreeType,
+    image: *ImageData,
+    wrap: bool,
+    approximate: bool,
+    rng: std.Random,
+) !fills.ImageFill {
+    const wrapped_tree = TreeMultiStore(tree_type);
+
+    var filler = try allocator.create(fills.MeanFill(wrapped_tree));
+    filler.* = try .init(
+        tree_allocator,
+        image,
+        wrap,
+        approximate,
+        rng,
+    );
+    return filler.filler();
+}
+
 /// Create the appropriate filler strategy.
 /// The initial allocator is used to create the filler struct
 /// The tree_allocator is passed to the created filler to manage
@@ -688,6 +742,19 @@ fn createFiller(
                             tree,
                             image,
                             &(target.*.?),
+                            approximate,
+                            rng,
+                        ),
+                    };
+                },
+                .mean => {
+                    return switch (tree_type) {
+                        inline else => |tree| meanFillOf(
+                            allocator,
+                            tree_allocator,
+                            tree,
+                            image,
+                            wrap,
                             approximate,
                             rng,
                         ),
@@ -808,7 +875,7 @@ pub fn main(init: std.process.Init) !void {
     var filler_buffer: [128]u8 = undefined;
     var filler_obj_alloc = std.heap.FixedBufferAllocator.init(&filler_buffer);
 
-    var fill_type = fills.Fills.min;
+    var fill_type = parameters.strategy;
     if (target != null) {
         fill_type = fills.Fills.target;
     }

@@ -20,6 +20,16 @@ pub const ImageData = struct {
         return self.size_x * bounded.y + bounded.x;
     }
 
+    pub fn fromIndex(self: *const ImageData, idx: usize) ImageCoord {
+        const bounded = idx % (self.size_x * self.size_y);
+        const y = bounded / self.size_x;
+        const x = bounded % self.size_x;
+        return .{
+            .x = x,
+            .y = y,
+        };
+    }
+
     // Ensures the coordinate is within the bounds of the image data.
     // Wraps with the image bounds.
     pub fn boundCoord(self: *const ImageData, coord: ImageCoord) ImageCoord {

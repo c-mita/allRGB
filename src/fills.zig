@@ -13,6 +13,7 @@ pub const Error = error{
 pub const Fills = enum {
     min,
     target,
+    mean,
 };
 
 pub const ImageFill = struct {
@@ -336,14 +337,200 @@ pub fn TargetFill(comptime tree_type: type) type {
     };
 }
 
-// Returns a subslice of the provided buffer populate with open neighbours the
-// given point. This accounts for wrapping at the image boundaries.
-fn getOpenNeighboursWrapped(
+const MeanVal = struct {
+    red: usize = 0,
+    green: usize = 0,
+    blue: usize = 0,
+    count: usize = 0,
+
+    pub fn add(self: *const MeanVal, other: Pixel) MeanVal {
+        return .{
+            .red = self.red + other.red,
+            .green = self.green + other.green,
+            .blue = self.blue + other.blue,
+            .count = self.count + 1,
+        };
+    }
+
+    pub fn toPixel(self: *const MeanVal) Pixel {
+        const red = self.red / self.count;
+        const green = self.green / self.count;
+        const blue = self.blue / self.count;
+        return .{
+            .red = @intCast(red),
+            .green = @intCast(green),
+            .blue = @intCast(blue),
+            .alpha = 0xFF,
+        };
+    }
+};
+
+/// Match according the mean of already populate neighbours
+pub fn MeanFill(comptime tree_type: type) type {
+    return struct {
+        allocator: std.heap.ArenaAllocator,
+        image: *ImageData,
+        means: []MeanVal,
+        tree: tree_type,
+        wrap: bool,
+        approximate: bool,
+        rng: std.Random,
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            image: *ImageData,
+            wrap: bool,
+            approximate: bool,
+            rng: std.Random,
+        ) !@This() {
+            var means = try allocator.alloc(MeanVal, image.buffer.len);
+            for (0..means.len) |idx| {
+                means[idx] = .{};
+            }
+            const tree_arena = std.heap.ArenaAllocator.init(allocator);
+            const tree: tree_type = tree_type.init();
+            return .{
+                .allocator = tree_arena,
+                .image = image,
+                .means = means,
+                .tree = tree,
+                .wrap = wrap,
+                .approximate = approximate,
+                .rng = rng,
+            };
+        }
+
+        pub fn repopulate(
+            ptr: *anyopaque,
+        ) Error!void {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+
+            _ = self.allocator.reset(.retain_capacity);
+            self.tree = tree_type.init();
+
+            for (0..self.means.len) |mean_idx| {
+                const mean_val = self.means[mean_idx];
+                if (mean_val.count == 0) {
+                    continue;
+                }
+                const mean_coord = self.image.fromIndex(mean_idx);
+                self.tree.add(
+                    self.allocator.allocator(),
+                    mean_val.toPixel(),
+                    mean_coord,
+                ) catch return Error.TreeError;
+            }
+        }
+
+        pub fn place(
+            ptr: *anyopaque,
+            colour: Pixel,
+            coord: ImageCoord,
+        ) Error!void {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            self.image.put(coord, colour);
+
+            // remove the mean value from the tree (if it's set)
+            const to_remove = self.means[self.image.toIndex(coord)];
+            if (to_remove.count > 0) {
+                try self.tree.remove(to_remove.toPixel(), coord);
+                // Erase it from our mean set by setting its count to 0
+                self.means[self.image.toIndex(coord)] = .{};
+            }
+
+            // Update the means of all our neighbours
+            // The maths should work out for neighbours with a mean count of 0
+            var buffer = std.mem.zeroes([8]ImageCoord);
+            const neighbours = getOpenNeighbours(self.image.*, coord, &buffer, self.wrap);
+            for (0..neighbours.len) |idx| {
+                const neighbour = neighbours[idx];
+                const linear_idx = self.image.toIndex(neighbour);
+                const old_val = self.means[linear_idx];
+                const new_val = old_val.add(colour);
+                self.means[linear_idx] = new_val;
+                if (old_val.count != 0) {
+                    try self.tree.remove(old_val.toPixel(), neighbour);
+                }
+                self.tree.add(
+                    self.allocator.allocator(),
+                    new_val.toPixel(),
+                    neighbour,
+                ) catch return Error.TreeError;
+            }
+        }
+
+        pub fn matchAndPlace(
+            ptr: *anyopaque,
+            colour: Pixel,
+        ) Error!void {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+
+            // Mean filling requires a multi tree and we want to randomly
+            // select a matching coordinate to avoid biasing the pixel
+            // placement in a particular direction.
+            const search_fn = if (self.approximate)
+                &tree_type.getAllNear
+            else
+                &tree_type.getAllNearest;
+
+            _, const indices = search_fn(
+                &self.tree,
+                colour,
+            ) orelse return Error.InvalidState;
+
+            const selected_index = self.rng.intRangeLessThan(usize, 0, indices.len);
+            const closest_idx = indices[selected_index];
+
+            try place(self, colour, closest_idx);
+        }
+
+        pub fn placeRandomly(
+            ptr: *anyopaque,
+            colour: Pixel,
+        ) Error!void {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+
+            const initial_x = self.rng.intRangeLessThan(usize, 0, self.image.size_x);
+            const initial_y = self.rng.intRangeLessThan(usize, 0, self.image.size_y);
+            try place(
+                self,
+                colour,
+                .{ .x = initial_x, .y = initial_y },
+            );
+        }
+
+        pub fn leaves(ptr: *anyopaque) usize {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            return self.tree.leaves();
+        }
+
+        pub fn emptyLeaves(ptr: *anyopaque) usize {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            return self.tree.emptyLeaves();
+        }
+
+        pub fn filler(self: *@This()) ImageFill {
+            return .{
+                .ptr = self,
+                .rng = self.rng,
+                .vtable = &.{
+                    .place = &@This().place,
+                    .placeRandomly = &@This().placeRandomly,
+                    .matchAndPlace = &@This().matchAndPlace,
+                    .repopulate = &@This().repopulate,
+                    .leaves = &@This().leaves,
+                    .emptyLeaves = &@This().emptyLeaves,
+                },
+            };
+        }
+    };
+}
+
+fn getNeighboursWrapped(
     image: ImageData,
     point: ImageCoord,
     buffer: []ImageCoord,
 ) []ImageCoord {
-    var candidates = std.mem.zeroes([8]ImageCoord);
     var c_idx: usize = 0;
     for (0..3) |y_idx| {
         const dy = @as(i32, @intCast(y_idx)) - 1;
@@ -361,28 +548,17 @@ fn getOpenNeighboursWrapped(
             if (x == point.x and y == point.y) {
                 continue;
             }
-            candidates[c_idx] = .{
+            buffer[c_idx] = .{
                 .x = @as(usize, @intCast(x)),
                 .y = @as(usize, @intCast(y)),
             };
             c_idx += 1;
         }
     }
-
-    var out_idx: usize = 0;
-    for (0..c_idx) |idx| {
-        const test_point = candidates[idx];
-        if (image.at(test_point).alpha == 0) {
-            buffer[out_idx] = test_point;
-            out_idx += 1;
-        }
-    }
-    return buffer[0..out_idx];
+    return buffer[0..c_idx];
 }
 
-/// Returns a subslice of the provided buffer populated with the open neighbours
-/// of the given point.
-fn getOpenNeighboursClamped(
+fn getNeighboursClamped(
     image: ImageData,
     point: ImageCoord,
     buffer: []ImageCoord,
@@ -395,48 +571,39 @@ fn getOpenNeighboursClamped(
     const top_edge = bounded.y == 0;
     const bottom_edge = bounded.y == image.size_y - 1;
 
-    var candidates = std.mem.zeroes([8]ImageCoord);
     if (!top_edge and !left_edge) {
-        candidates[idx] = .{ .x = bounded.x - 1, .y = bounded.y - 1 };
+        buffer[idx] = .{ .x = bounded.x - 1, .y = bounded.y - 1 };
         idx += 1;
     }
     if (!top_edge) {
-        candidates[idx] = .{ .x = bounded.x, .y = bounded.y - 1 };
+        buffer[idx] = .{ .x = bounded.x, .y = bounded.y - 1 };
         idx += 1;
     }
     if (!top_edge and !right_edge) {
-        candidates[idx] = .{ .x = bounded.x + 1, .y = bounded.y - 1 };
+        buffer[idx] = .{ .x = bounded.x + 1, .y = bounded.y - 1 };
         idx += 1;
     }
     if (!left_edge) {
-        candidates[idx] = .{ .x = bounded.x - 1, .y = bounded.y };
+        buffer[idx] = .{ .x = bounded.x - 1, .y = bounded.y };
         idx += 1;
     }
     if (!right_edge) {
-        candidates[idx] = .{ .x = bounded.x + 1, .y = bounded.y };
+        buffer[idx] = .{ .x = bounded.x + 1, .y = bounded.y };
         idx += 1;
     }
     if (!left_edge and !bottom_edge) {
-        candidates[idx] = .{ .x = bounded.x - 1, .y = bounded.y + 1 };
+        buffer[idx] = .{ .x = bounded.x - 1, .y = bounded.y + 1 };
         idx += 1;
     }
     if (!bottom_edge) {
-        candidates[idx] = .{ .x = bounded.x, .y = bounded.y + 1 };
+        buffer[idx] = .{ .x = bounded.x, .y = bounded.y + 1 };
         idx += 1;
     }
     if (!right_edge and !bottom_edge) {
-        candidates[idx] = .{ .x = bounded.x + 1, .y = bounded.y + 1 };
+        buffer[idx] = .{ .x = bounded.x + 1, .y = bounded.y + 1 };
         idx += 1;
     }
-    var out_idx: usize = 0;
-    for (0..idx) |candidate_idx| {
-        const test_point = candidates[candidate_idx];
-        if (image.at(test_point).alpha == 0) {
-            buffer[out_idx] = test_point;
-            out_idx += 1;
-        }
-    }
-    return buffer[0..out_idx];
+    return buffer[0..idx];
 }
 
 // Fills the buffer with the unfilled neighbours of the given pixel.
@@ -446,11 +613,23 @@ fn getOpenNeighbours(
     buffer: []ImageCoord,
     wrap: bool,
 ) []ImageCoord {
+    var to_fill = std.mem.zeroes([8]ImageCoord);
+    var candidates: []ImageCoord = undefined;
     if (wrap) {
-        return getOpenNeighboursWrapped(image, point, buffer);
+        candidates = getNeighboursWrapped(image, point, &to_fill);
     } else {
-        return getOpenNeighboursClamped(image, point, buffer);
+        candidates = getNeighboursClamped(image, point, &to_fill);
     }
+
+    var out_idx: usize = 0;
+    for (0..candidates.len) |candidate_idx| {
+        const test_point = candidates[candidate_idx];
+        if (image.at(test_point).alpha == 0) {
+            buffer[out_idx] = test_point;
+            out_idx += 1;
+        }
+    }
+    return buffer[0..out_idx];
 }
 
 fn hasOpenNeighbours(image: ImageData, point: ImageCoord, wrap: bool) bool {
