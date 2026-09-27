@@ -112,7 +112,7 @@ fn intDistance(left: i32, right: i32) usize {
 }
 
 test "Bucket add" {
-    var bucket: Bucket(i32, i32, intDistance) = .{};
+    var bucket: Bucket(i32, i32, usize, intDistance) = .{};
 
     try bucket.putValue(17, 1024);
     try bucket.putValue(19, 96);
@@ -123,7 +123,7 @@ test "Bucket add" {
 }
 
 test "Bucket remove" {
-    var bucket = Bucket(i32, i32, intDistance){};
+    var bucket = Bucket(i32, i32, usize, intDistance){};
 
     try bucket.putValue(12, 1);
     try bucket.putValue(19, 2);
@@ -137,7 +137,7 @@ test "Bucket remove" {
 }
 
 test "Bucket nearest" {
-    var bucket = Bucket(i32, i32, intDistance){};
+    var bucket = Bucket(i32, i32, usize, intDistance){};
 
     try bucket.putValue(10, 1);
     try bucket.putValue(20, 2);
@@ -159,7 +159,7 @@ test "Bucket nearest" {
 }
 
 test "Bucket duplicate" {
-    var bucket = Bucket(i32, i32, intDistance){};
+    var bucket = Bucket(i32, i32, usize, intDistance){};
     const value: i32 = 3142;
 
     try bucket.putValue(value, 16);
@@ -174,7 +174,7 @@ test "Bucket duplicate" {
 }
 
 test "Bucket add returns error on full" {
-    var bucket = Bucket(i32, i32, intDistance){};
+    var bucket = Bucket(i32, i32, usize, intDistance){};
     for (0..LEAF_SIZE) |idx| {
         const k: i32 = @intCast(idx);
         try bucket.putValue(k, k);
