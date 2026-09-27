@@ -3,6 +3,9 @@ const std = @import("std");
 const ImageCoord = @import("image.zig").ImageCoord;
 const ImageData = @import("image.zig").ImageData;
 const Pixel = @import("colours.zig").Pixel;
+const TreeMultiStore = @import("trees.zig").TreeMultiStore;
+const TreeStore = @import("trees.zig").TreeStore;
+const TreeType = @import("trees.zig").TreeType;
 
 pub const Error = error{
     MissingKey,
@@ -55,11 +58,17 @@ pub const ImageFill = struct {
     }
 };
 
-pub fn MinFill(comptime tree_type: type) type {
+fn WrappedTree(comptime tree_type: TreeType, comptime multi: bool) type {
+    return if (multi) TreeMultiStore(tree_type) else TreeStore(tree_type);
+}
+
+pub fn MinFill(comptime tree_type: TreeType, comptime multi: bool) type {
+    const wrapped_type = WrappedTree(tree_type, multi);
+
     return struct {
         allocator: std.heap.ArenaAllocator,
         image: *ImageData,
-        tree: tree_type,
+        tree: wrapped_type,
         wrap: bool,
         approximate: bool,
         rng: std.Random,
@@ -72,7 +81,7 @@ pub fn MinFill(comptime tree_type: type) type {
             rng: std.Random,
         ) @This() {
             const tree_arena = std.heap.ArenaAllocator.init(allocator);
-            const tree: tree_type = tree_type.init();
+            const tree = wrapped_type.init();
             return .{
                 .allocator = tree_arena,
                 .image = image,
@@ -120,7 +129,7 @@ pub fn MinFill(comptime tree_type: type) type {
             const self: *@This() = @ptrCast(@alignCast(ptr));
 
             _ = self.allocator.reset(.retain_capacity);
-            self.tree = tree_type.init();
+            self.tree = wrapped_type.init();
             for (0..self.image.size_y) |y| {
                 for (0..self.image.size_x) |x| {
                     const slot: ImageCoord = .{ .x = x, .y = y };
@@ -146,9 +155,9 @@ pub fn MinFill(comptime tree_type: type) type {
             const self: *@This() = @ptrCast(@alignCast(ptr));
 
             const search_fn = if (self.approximate)
-                &tree_type.getNear
+                &wrapped_type.getNear
             else
-                &tree_type.getNearest;
+                &wrapped_type.getNearest;
             while (true) {
                 const closest_pixel, const closest_idx = search_fn(
                     &self.tree,
@@ -215,12 +224,12 @@ pub fn MinFill(comptime tree_type: type) type {
 
 /// A fill strategy that tries to place pixels according
 /// to a reference image.
-pub fn TargetFill(comptime tree_type: type) type {
+pub fn TargetFill(comptime tree_type: TreeType) type {
     return struct {
         allocator: std.heap.ArenaAllocator,
         image: *ImageData,
         reference: *ImageData,
-        tree: tree_type,
+        tree: TreeMultiStore(tree_type),
         approximate: bool,
         rng: std.Random,
 
@@ -232,7 +241,7 @@ pub fn TargetFill(comptime tree_type: type) type {
             rng: std.Random,
         ) @This() {
             const tree_arena = std.heap.ArenaAllocator.init(allocator);
-            const tree: tree_type = tree_type.init();
+            const tree = TreeMultiStore(tree_type).init();
             return .{
                 .allocator = tree_arena,
                 .image = image,
@@ -275,9 +284,9 @@ pub fn TargetFill(comptime tree_type: type) type {
             const self: *@This() = @ptrCast(@alignCast(ptr));
 
             const search_fn = if (self.approximate)
-                &tree_type.getNear
+                &TreeMultiStore(tree_type).getNear
             else
-                &tree_type.getNearest;
+                &TreeMultiStore(tree_type).getNearest;
 
             const closest_pixel, const closest_idx = search_fn(
                 &self.tree,
@@ -294,7 +303,7 @@ pub fn TargetFill(comptime tree_type: type) type {
             const self: *@This() = @ptrCast(@alignCast(ptr));
 
             _ = self.allocator.reset(.retain_capacity);
-            self.tree = tree_type.init();
+            self.tree = TreeMultiStore(tree_type).init();
 
             for (0..self.reference.size_y) |y| {
                 for (0..self.reference.size_x) |x| {
@@ -366,12 +375,12 @@ const MeanVal = struct {
 };
 
 /// Match according the mean of already populate neighbours
-pub fn MeanFill(comptime tree_type: type) type {
+pub fn MeanFill(comptime tree_type: TreeType) type {
     return struct {
         allocator: std.heap.ArenaAllocator,
         image: *ImageData,
         means: []MeanVal,
-        tree: tree_type,
+        tree: TreeMultiStore(tree_type),
         wrap: bool,
         approximate: bool,
         rng: std.Random,
@@ -388,7 +397,7 @@ pub fn MeanFill(comptime tree_type: type) type {
                 means[idx] = .{};
             }
             const tree_arena = std.heap.ArenaAllocator.init(allocator);
-            const tree: tree_type = tree_type.init();
+            const tree = TreeMultiStore(tree_type).init();
             return .{
                 .allocator = tree_arena,
                 .image = image,
@@ -406,7 +415,7 @@ pub fn MeanFill(comptime tree_type: type) type {
             const self: *@This() = @ptrCast(@alignCast(ptr));
 
             _ = self.allocator.reset(.retain_capacity);
-            self.tree = tree_type.init();
+            self.tree = TreeMultiStore(tree_type).init();
 
             for (0..self.means.len) |mean_idx| {
                 const mean_val = self.means[mean_idx];
@@ -469,9 +478,9 @@ pub fn MeanFill(comptime tree_type: type) type {
             // select a matching coordinate to avoid biasing the pixel
             // placement in a particular direction.
             const search_fn = if (self.approximate)
-                &tree_type.getAllNear
+                &TreeMultiStore(tree_type).getAllNear
             else
-                &tree_type.getAllNearest;
+                &TreeMultiStore(tree_type).getAllNearest;
 
             _, const indices = search_fn(
                 &self.tree,
